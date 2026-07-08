@@ -1,0 +1,5 @@
+llm:
+  api_key: sk-test-dummy
+  api_type: openai
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learning-agent-system"
+version = "0.1.0"
+description = "基于大模型的个性化资源生成与学习多智能体系统"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = [
+    "metagpt>=0.5.0",
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "rich",
+    "httpx>=0.24,<0.28",
+    "openai==1.6.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["learning_agent_system*"]
+
+[project.scripts]
+learning-agent = "learning_agent_system.main:main"

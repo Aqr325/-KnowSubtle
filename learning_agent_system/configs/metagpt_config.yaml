@@ -1,0 +1,15 @@
+llm:
+  api_type: "openai"
+  model: "gpt-4o"
+  base_url: "https://api.openai.com/v1"
+  api_key: "${OPENAI_API_KEY}"
+  temperature: 0.7
+  max_tokens: 4096
+
+context:
+  max_tokens: 128000
+  max_round: 20
+
+agent:
+  max_react_loop: 50
+  memory_k: 200
