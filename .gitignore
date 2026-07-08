@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+*.spec
+
+# Virtual environments
+.venv/
+.venv311/
+.env/
+
+# Secrets & API keys
+.env
+config/key.yaml
+config/app.key
+
+# Dependencies
+react-bits/
+
+# Build & release artifacts
+Release-Package/Core/main/main.exe
+Release-Package/Core/main/_internal/
+Release-Package/Install/
+
+# Project memory (local only)
+.learning_memory/
+*.learning_memory/
+.workbuddy/
+
+# IDE & OS
+.vscode/
+*.code-workspace
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+_logs/
+/tmp/
+
+# Misc
+nul

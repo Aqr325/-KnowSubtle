@@ -1,0 +1,39 @@
+WordCosmos Learning Universe - 更新日志
+========================================
+
+v1.0.0  (2026-07-07)
+-------------------
+- 首个 Windows 发行包（Release-Package）结构搭建完成。
+- 后端以 FastAPI 本地服务形式随主程序启动，自动打开浏览器访问仪表盘。
+- 前端仪表盘（电影感 UI）打包至 Resources/html：
+  * 统计概览 / 每日目标环形 / 记忆曲线 / 词库（标记、筛选、保留率）
+  * 星球系统 / 知识图谱 / 词云 / 日历 / 艾宾浩斯复习 / 番茄钟
+  * 多智能体聊天（6 个 Agent）
+- 路径解析双模化：开发模式读取项目目录，打包后读取 Resources/Config/AppData。
+- 安装包由 NSIS 脚本（Install/install.nsi）生成，含 vc_redist 静默安装。
+- 发布文件提供 SHA256 校验（Security/FileHash.txt）。
+
+v2.1.0  (2026-07-07)
+-------------------
+- **main.exe 已在本环境真正编译产出**（PyInstaller 6.21.0，--onedir --windowed 无控制台桌面版）。
+  真实产物为 `Core/main/main.exe`（onedir：--name=main 外套一层 main/ 目录），是可独立双击运行的
+  Windows 程序，不依赖任何 Python 环境。
+- 修正打包后路径解析：资源/配置由 `_find_up` 从可执行文件目录**逐级向上**查找 `Resources/html`/`Resources/Config`
+  （布局无关，兼容 onedir 单文件夹、单文件 exe、以及 NSIS 同级发行等多种布局）。
+- 修正 launcher.py 在打包模式（frozen）下因 AppData 日志目录创建失败导致的闪退
+  （日志重定向加 try/except 兜底，windowed 下 stdout 本就无去处）。
+- 验证：独立运行 `Core/main/main.exe`，对 `/`、`/api/stats/dashboard`、`/landing.html`、
+  `/api/goals/today`、`/api/sessions`（离线 demo 流水线）均返回 HTTP 200，页面与接口正常工作，
+  数据持久化至 `AppData/WordCosmos/Data`。
+- FileHash.txt 更新为 132 个文件（含 main.exe 与 _internal 依赖），SHA256 全部实算。
+- Core/ 体积约 50MB（main.exe 10.5MB + _internal 依赖）。
+
+已知限制
+--------
+- 当前 LLM 调用由 local_metagpt stub 打桩，配置真实 API 后方可启用完整 AI 能力
+  （程序本身运行、数据展示、复习/番茄钟等本地功能不受影响）。
+- Runtime/vc_redist.exe 已内置（`Install/vc_redist.exe`，微软官方运行库），安装脚本会静默安装；
+  `_internal` 亦自带 `VCRUNTIME140.dll`，绝大多数 Win10/11 即便跳过该步骤也可直接运行。
+- 用户手册为 .md（沙箱无 pandoc）：可用 `pandoc 用户手册.md -o 用户手册.pdf`
+  或浏览器"打印为 PDF"生成本目录树要求的 .pdf。
+- 如需重新构建，本机 Windows 执行 `python build/build_exe.py` 即可（命令与本次一致）。
