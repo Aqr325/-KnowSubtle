@@ -497,23 +497,47 @@ class TeamOrchestrator:
         rsp = await agent.run(msg)
         return ExerciseResult.from_json(rsp.content)
 
-    # ---- 持久化支持 ----
+    # ---- 持久化支持（SQLite 数据库，替代散落的 JSON 文件） ----
+
+    def _db_session_factory(self):
+        """获取同步 Session 工厂（在 async 事件循环内安全使用，不冲突 async 引擎）"""
+        from sqlalchemy.orm import sessionmaker
+        from learning_agent_system.database.session import get_sync_engine
+        return sessionmaker(get_sync_engine(), expire_on_commit=False)
 
     def _save_checkpoint(self) -> None:
-        """保存当前阶段检查点（原子写，避免半截写入导致下次加载失败）"""
-        checkpoint_path = self.storage_dir / f"checkpoint_{self.context.session_id}.json"
-        tmp = checkpoint_path.with_suffix(".json.tmp")
+        """保存当前阶段检查点到数据库（Session.metadata_json 存完整 SessionContext）。"""
+        if not self.context:
+            return
+        from sqlalchemy import select
+        from learning_agent_system.database.models import Session as SessionModel
+
+        data = json.dumps(self.context.to_dict(), ensure_ascii=False)
+        phase = self.context.current_phase.value if hasattr(self.context.current_phase, "value") else str(self.context.current_phase)
+        sid = self.context.session_id
+
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(self.context.to_dict(), f, ensure_ascii=False, indent=2)
-            os.replace(tmp, checkpoint_path)
+            factory = self._db_session_factory()
+            with factory() as s:
+                existing = s.execute(
+                    select(SessionModel).where(SessionModel.session_id == sid)
+                ).scalar_one_or_none()
+                now = datetime.now()
+                if existing:
+                    existing.metadata_json = data
+                    existing.current_phase = phase
+                    existing.updated_at = now
+                else:
+                    s.add(SessionModel(
+                        session_id=sid,
+                        current_phase=phase,
+                        metadata_json=data,
+                        created_at=now,
+                        updated_at=now,
+                    ))
+                s.commit()
         except Exception as e:
-            logger.error(f"Checkpoint save failed: {e}")
-            try:
-                if tmp.exists():
-                    tmp.unlink()
-            except Exception:
-                pass
+            logger.error(f"Checkpoint save to DB failed: {e}")
 
     def _validate_session_id(self, session_id: str) -> bool:
         """白名单校验 session_id，仅允许字母、数字、下划线、中划线、点号。防止路径穿越。"""
@@ -521,32 +545,41 @@ class TeamOrchestrator:
         return bool(re.match(r'^[a-zA-Z0-9_\-\.]+$', session_id))
 
     def load_session(self, session_id: str) -> Optional[SessionContext]:
-        """加载指定会话（损坏时安全降级并清理坏文件）"""
+        """从数据库加载指定会话（损坏时安全降级）"""
         if not self._validate_session_id(session_id):
             logger.warning(f"Invalid session_id (path traversal attempt): {session_id}")
             return None
-        checkpoint_path = self.storage_dir / f"checkpoint_{session_id}.json"
-        if not checkpoint_path.exists():
-            logger.warning(f"Session not found: {session_id}")
-            return None
+        from sqlalchemy import select
+        from learning_agent_system.database.models import Session as SessionModel
+
         try:
-            with open(checkpoint_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            factory = self._db_session_factory()
+            with factory() as s:
+                rec = s.execute(
+                    select(SessionModel).where(SessionModel.session_id == session_id)
+                ).scalar_one_or_none()
+            if not rec or not rec.metadata_json:
+                logger.warning(f"Session not found in DB: {session_id}")
+                return None
+            data = json.loads(rec.metadata_json)
             self.context = SessionContext.from_dict(data)
             return self.context
         except Exception as e:
             logger.error(f"Failed to load session {session_id}: {e}")
-            try:
-                checkpoint_path.unlink()
-            except Exception:
-                pass
             return None
 
     def list_sessions(self) -> List[str]:
-        """列出所有历史会话"""
-        pattern = "checkpoint_*.json"
-        files = sorted(self.storage_dir.glob(pattern), reverse=True)
-        return [f.stem.replace("checkpoint_", "") for f in files]
+        """列出所有历史会话（从数据库）"""
+        from sqlalchemy import select
+        from learning_agent_system.database.models import Session as SessionModel
+        try:
+            factory = self._db_session_factory()
+            with factory() as s:
+                rows = s.execute(select(SessionModel.session_id)).scalars().all()
+            return list(rows)
+        except Exception as e:
+            logger.error(f"Failed to list sessions: {e}")
+            return []
 
     def get_summary(self) -> Dict[str, Any]:
         """获取当前会话摘要"""
