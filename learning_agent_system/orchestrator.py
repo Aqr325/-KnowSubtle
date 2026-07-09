@@ -35,6 +35,7 @@ from learning_agent_system.schema import (
     KnowledgeDiagnosis,
     ResourcePlan,
     LearningPath,
+    LearningModule,
     TutorSession,
     ExerciseResult,
     Achievement,
@@ -288,7 +289,15 @@ class TeamOrchestrator:
             topics_covered=["演示资源主题"],
             resource_counts={"article": 1, "exercise": 1},
         )
-        ctx.learning_path = LearningPath(goals=[learning_goal])
+        ctx.learning_path = LearningPath(
+            goals=[learning_goal],
+            modules=[
+                LearningModule(id="m1", title="核心词汇与词根词缀", topics=["词根词缀"], estimated_hours=2.0),
+                LearningModule(id="m2", title="高频搭配与短语", topics=["搭配"], estimated_hours=1.5),
+                LearningModule(id="m3", title="阅读强化与真题演练", topics=["阅读"], estimated_hours=2.5),
+            ],
+            progress=0.0,
+        )
         ctx.current_phase = Phase.PLANNING
         return ctx
 
@@ -411,7 +420,7 @@ class TeamOrchestrator:
             session_id=self.context.session_id,
             learner_name=self.context.learner_profile.name if self.context.learner_profile else "Unknown",
             date_range={"start": self.context.learning_goal.created_at if self.context.learning_goal else ""},
-            total_hours=self.context.learning_path.estimated_hours if self.context.learning_path else 0,
+            total_hours=sum(m.estimated_hours for m in (self.context.learning_path.modules or [])) if self.context.learning_path else 0,
             topics_covered=list(self.context.diagnosis.diagnosed_topics.keys()) if self.context.diagnosis else [],
             exercises_completed=total_count,
             exercises_correct=correct_count,
