@@ -1019,6 +1019,17 @@ class VocabEntry(BaseModel):
     mastered: Optional[bool] = None
 
 
+class VocabUpdateEntry(BaseModel):
+    """更新模型：word 可选（前端“标记掌握”仅传 {mastered}，不应 422）。"""
+    word: Optional[str] = None
+    meaning: Optional[str] = None
+    notes: Optional[str] = None
+    example: Optional[str] = None
+    source: Optional[str] = None
+    subject: Optional[str] = None
+    mastered: Optional[bool] = None
+
+
 @app.get("/api/vocab")
 async def get_vocab(subject: Optional[str] = None) -> List[Dict[str, Any]]:
     """获取收藏单词，可选按学科过滤"""
@@ -1062,7 +1073,7 @@ async def add_vocab(entry: VocabEntry) -> Dict[str, Any]:
 
 
 @app.put("/api/vocab/{word_id}")
-async def update_vocab(word_id: int, entry: VocabEntry) -> Dict[str, Any]:
+async def update_vocab(word_id: int, entry: VocabUpdateEntry) -> Dict[str, Any]:
     """更新单词笔记/掌握状态"""
     async with get_async_session() as session:
         repo = VocabRepository(session)

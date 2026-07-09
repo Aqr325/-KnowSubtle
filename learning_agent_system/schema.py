@@ -198,6 +198,7 @@ class LearningGoal(BaseModel):
     target_topics: List[str] = Field(default_factory=list)
     estimated_time: float = 10.0  # hours
     priority: str = "normal"  # high / normal / low
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()
