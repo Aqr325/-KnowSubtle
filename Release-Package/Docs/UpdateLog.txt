@@ -1,4 +1,4 @@
-WordCosmos Learning Universe - 更新日志
+KnowSubtle Learning Universe - 更新日志
 ========================================
 
 v1.0.0  (2026-07-07)
@@ -15,18 +15,18 @@ v1.0.0  (2026-07-07)
 
 v2.1.0  (2026-07-07)
 -------------------
-- **main.exe 已在本环境真正编译产出**（PyInstaller 6.21.0，--onedir --windowed 无控制台桌面版）。
-  真实产物为 `Core/main/main.exe`（onedir：--name=main 外套一层 main/ 目录），是可独立双击运行的
+- **KnowSubtle.exe 已在本环境真正编译产出**（PyInstaller 6.21.0，--onedir --windowed 无控制台桌面版）。
+  真实产物为 `Core/KnowSubtle/KnowSubtle.exe`（onedir：--name=main 外套一层 main/ 目录），是可独立双击运行的
   Windows 程序，不依赖任何 Python 环境。
 - 修正打包后路径解析：资源/配置由 `_find_up` 从可执行文件目录**逐级向上**查找 `Resources/html`/`Resources/Config`
   （布局无关，兼容 onedir 单文件夹、单文件 exe、以及 NSIS 同级发行等多种布局）。
 - 修正 launcher.py 在打包模式（frozen）下因 AppData 日志目录创建失败导致的闪退
   （日志重定向加 try/except 兜底，windowed 下 stdout 本就无去处）。
-- 验证：独立运行 `Core/main/main.exe`，对 `/`、`/api/stats/dashboard`、`/landing.html`、
+- 验证：独立运行 `Core/KnowSubtle/KnowSubtle.exe`，对 `/`、`/api/stats/dashboard`、`/landing.html`、
   `/api/goals/today`、`/api/sessions`（离线 demo 流水线）均返回 HTTP 200，页面与接口正常工作，
-  数据持久化至 `AppData/WordCosmos/Data`。
-- FileHash.txt 更新为 132 个文件（含 main.exe 与 _internal 依赖），SHA256 全部实算。
-- Core/ 体积约 50MB（main.exe 10.5MB + _internal 依赖）。
+  数据持久化至 `AppData/KnowSubtle/Data`。
+- FileHash.txt 更新为 132 个文件（含 KnowSubtle.exe 与 _internal 依赖），SHA256 全部实算。
+- Core/ 体积约 50MB（KnowSubtle.exe 10.5MB + _internal 依赖）。
 
 已知限制
 --------

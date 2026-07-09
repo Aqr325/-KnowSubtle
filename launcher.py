@@ -1,4 +1,4 @@
-"""WordCosmos Learning Universe - Windows 启动器（PyInstaller 入口 → main.exe）
+"""KnowSubtle Learning Universe - Windows 启动器（PyInstaller 入口 → KnowSubtle.exe）
 
 职责：
 1. 设置 metagpt / LLM 运行环境变量（兼容 local_metagpt stub 打桩）
@@ -27,7 +27,7 @@ os.environ.setdefault("DISABLE_LLM_PROVIDER_CHECK", "true")
 # 打包模式（--windowed）下 stdout/stderr 无处可去，重定向到用户目录日志
 if getattr(sys, "frozen", False):
     try:
-        _log_dir = Path(os.environ.get("APPDATA", str(ROOT))) / "WordCosmos" / "Logs"
+        _log_dir = Path(os.environ.get("APPDATA", str(ROOT))) / "KnowSubtle" / "Logs"
         _log_dir.mkdir(parents=True, exist_ok=True)
         sys.stdout = open(_log_dir / "stdout.log", "a", buffering=1, errors="replace")
         sys.stderr = open(_log_dir / "stderr.log", "a", buffering=1, errors="replace")
@@ -90,7 +90,7 @@ def _open_native_window(port: int) -> bool:
     try:
         _log("正在打开原生桌面窗口 ...")
         webview.create_window(
-            "WordCosmos 学习宇宙",
+            "KnowSubtle 学习宇宙",
             url,
             width=1280,
             height=800,

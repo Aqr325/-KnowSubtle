@@ -20,7 +20,7 @@ except Exception as _e:
     )
 
 """
-WordCosmos Learning Universe - FastAPI Backend
+KnowSubtle Learning Universe - FastAPI Backend
 Personalized Resource Generation & Learning Multi-Agent System
 重构后：所有 Mock API 端点替换为 TeamOrchestrator 真实调用
 """
@@ -81,7 +81,7 @@ logger = logging.getLogger("app")
 
 # ── FastAPI App ──
 app = FastAPI(
-    title="WordCosmos Learning Universe API",
+    title="KnowSubtle Learning Universe API",
     description="个性化资源生成与学习多智能体系统",
     version="3.0.0"
 )
@@ -130,8 +130,8 @@ async def add_security_headers(request: Request, call_next):
 
 # ── 路径解析（开发模式 / PyInstaller 打包后通用）──
 def _app_root() -> Path:
-    # PyInstaller 单文件夹打包时 sys.executable 为 Core/main/main.exe
-    # （--onedir 会在 --name 外再套一层目录）；单文件/直接 Core/main.exe 则为上一层。
+    # PyInstaller 单文件夹打包时 sys.executable 为 Core/KnowSubtle/KnowSubtle.exe
+    # （--onedir 会在 --name 外再套一层目录）；单文件/直接 Core/KnowSubtle/KnowSubtle.exe 则为上一层。
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent
@@ -153,8 +153,8 @@ def _find_up(start: Path, *rel) -> "Path | None":
 
 def _resolve_resource_dir() -> Path:
     # 打包布局随方式浮动，不能硬编码层级：
-    #   onedir (--onedir):  <dist>/main/main.exe  -> 向上两级到 Release-Package/Resources/html
-    #   直接 Core/main.exe: 向上一级到 Release-Package/Resources/html
+    #   onedir (--onedir):  <dist>/main/KnowSubtle.exe  -> 向上两级到 Release-Package/Resources/html
+    #   直接 Core/KnowSubtle/KnowSubtle.exe: 向上一级到 Release-Package/Resources/html
     #   NSIS 分发:          Release-Package/Resources/html 与 Core 同级
     # 因此从 _app_root() 向上逐级查找包含 html 的 Resources 目录。
     found = _find_up(_app_root(), "Resources", "html")
@@ -172,7 +172,7 @@ def _resolve_config_dir() -> Path:
         return found
     if getattr(sys, "frozen", False):
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        d = Path(base) / "WordCosmos" / "Config"
+        d = Path(base) / "KnowSubtle" / "Config"
         d.mkdir(parents=True, exist_ok=True)
         return d
     return Path(__file__).resolve().parent / "config"
@@ -187,7 +187,7 @@ def _resolve_data_dir() -> Path:
     if getattr(sys, "frozen", False):
         # 安装到 Program Files 时程序目录不可写，落到用户 AppData
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        d = Path(base) / "WordCosmos" / "Data"
+        d = Path(base) / "KnowSubtle" / "Data"
         d.mkdir(parents=True, exist_ok=True)
         return d
     d = Path(__file__).resolve().parent / ".learning_memory"
@@ -204,7 +204,7 @@ STORAGE_DIR = _resolve_data_dir()
 
 def load_app_config() -> dict:
     """加载 Config/config.json；缺失时写入默认配置。"""
-    cfg = {"app_name": "WordCosmos Learning Universe", "port": 8000, "host": "127.0.0.1"}
+    cfg = {"app_name": "KnowSubtle Learning Universe", "port": 8000, "host": "127.0.0.1"}
     cfg_path = CONFIG_DIR / "config.json"
     if cfg_path.exists():
         try:
@@ -1190,7 +1190,7 @@ async def update_today_progress(data: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.get("/api/health")
 async def health_check() -> Dict[str, str]:
-    return {"status": "ok", "service": "WordCosmos Learning Universe API", "version": "3.0.0"}
+    return {"status": "ok", "service": "KnowSubtle Learning Universe API", "version": "3.0.0"}
 
 
 # ====================================================================

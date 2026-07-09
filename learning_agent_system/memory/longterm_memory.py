@@ -37,14 +37,14 @@ class LongTermMemory:
             fallback = None
             if getattr(_sys, "frozen", False):
                 base = os.environ.get("APPDATA") or os.path.expanduser("~")
-                fallback = os.path.join(base, "WordCosmos", "Data", "longterm")
+                fallback = os.path.join(base, "KnowSubtle", "Data", "longterm")
             if fallback:
                 try:
                     os.makedirs(fallback, exist_ok=True)
                     self.dir = fallback
                     print(f"[LongTermMemory] 回退持久化目录 -> {fallback}  (原 {self.dir} 不可写: {e})")
                 except Exception:
-                    self.dir = os.path.join(os.path.expanduser("~"), ".wordcosmos", "longterm")
+                    self.dir = os.path.join(os.path.expanduser("~"), ".knowsubtle", "longterm")
                     os.makedirs(self.dir, exist_ok=True)
             else:
                 raise RuntimeError(f"LongTermMemory 无法创建目录 {self.dir}: {e}") from e

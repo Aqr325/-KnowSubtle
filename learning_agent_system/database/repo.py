@@ -1,5 +1,5 @@
 """
-WordCosmos Database Repository — 数据访问层
+KnowSubtle Database Repository — 数据访问层
 
 为每个核心实体提供 Repository 类，封装 CRUD 操作。
 统一使用 async/await，支持批量查询和聚合统计。
@@ -600,7 +600,7 @@ async def migrate_json_to_db(storage_dir: Optional[str] = None):
             storage_dir = env
         elif getattr(sys, "frozen", False):
             base = os.environ.get("APPDATA") or os.path.expanduser("~")
-            storage_dir = str(Path(base) / "WordCosmos" / "Data")
+            storage_dir = str(Path(base) / "KnowSubtle" / "Data")
         else:
             storage_dir = str(Path(__file__).resolve().parent.parent.parent / ".learning_memory")
 

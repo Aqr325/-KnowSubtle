@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""WordCosmos 全功能验证脚本：覆盖全部 API 端点 + 完整 AI 流水线 + DB CRUD。
+"""KnowSubtle 全功能验证脚本：覆盖全部 API 端点 + 完整 AI 流水线 + DB CRUD。
 
 用法：python verify_all.py [BASE_URL]
 依赖：仅标准库 (urllib/json)。运行前需先启动服务。

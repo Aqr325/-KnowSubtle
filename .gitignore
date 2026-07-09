@@ -25,8 +25,9 @@ config/app.key
 react-bits/
 
 # Build & release artifacts
-Release-Package/Core/main/main.exe
-Release-Package/Core/main/_internal/
+Release-Package/Core/KnowSubtle/KnowSubtle.exe
+Release-Package/Core/KnowSubtle/_internal/
+Release-Package/Core/main/
 Release-Package/Install/
 
 # Project memory (local only)

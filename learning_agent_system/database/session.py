@@ -1,5 +1,5 @@
 """
-WordCosmos Database Session — 异步引擎与会话管理
+KnowSubtle Database Session — 异步引擎与会话管理
 
 SQLite + asyncpg 不兼容，使用 aiosqlite 作为异步驱动。
 支持桌面应用打包后从 AppData 读取数据库路径。
@@ -34,26 +34,56 @@ _sync_engine = None
 _sync_session_factory = None
 
 
+def _old_db_path() -> Optional[Path]:
+    """旧版本（WordCosmos）数据库路径，用于升级迁移。"""
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return Path(base) / "WordCosmos" / "Data" / "wordcosmos.db"
+    project_root = Path(__file__).resolve().parent.parent.parent
+    return project_root / ".learning_memory" / "wordcosmos.db"
+
+
+def _maybe_migrate_old_db(new_path: Path) -> None:
+    """升级兼容：若新库不存在但旧 WordCosmos 库存在，复制旧库到新位置（保留旧库）。"""
+    if new_path.exists():
+        return
+    old = _old_db_path()
+    if old and old.exists():
+        try:
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(old, new_path)
+            logger.info("已从旧数据库迁移: %s -> %s", old, new_path)
+        except Exception as e:
+            logger.warning("旧数据库迁移失败（将新建空库）: %s", e)
+
+
 def _resolve_db_path() -> Path:
-    """解析数据库文件路径，兼容开发模式与打包模式。"""
+    """解析数据库文件路径，兼容开发模式与打包模式，并迁移旧版数据。"""
     env = os.environ.get("LAS_DB_PATH")
     if env:
         d = Path(env)
         d.parent.mkdir(parents=True, exist_ok=True)
-        return d
+        p = d
+        _maybe_migrate_old_db(p)
+        return p
 
-    # 打包后：AppData/WordCosmos/Data/wordcosmos.db
+    # 打包后：AppData/KnowSubtle/Data/knowsubtle.db
     if getattr(sys, "frozen", False):
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
-        d = Path(base) / "WordCosmos" / "Data"
+        d = Path(base) / "KnowSubtle" / "Data"
         d.mkdir(parents=True, exist_ok=True)
-        return d / "wordcosmos.db"
+        p = d / "knowsubtle.db"
+        _maybe_migrate_old_db(p)
+        return p
 
-    # 开发模式：.learning_memory/wordcosmos.db
+    # 开发模式：.learning_memory/knowsubtle.db
     project_root = Path(__file__).resolve().parent.parent.parent
     data_dir = project_root / ".learning_memory"
     data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir / "wordcosmos.db"
+    p = data_dir / "knowsubtle.db"
+    _maybe_migrate_old_db(p)
+    return p
 
 
 DB_PATH: Path = _resolve_db_path()

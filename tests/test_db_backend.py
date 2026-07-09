@@ -1,5 +1,5 @@
 """
-WordCosmos 数据库后端回归测试
+KnowSubtle 数据库后端回归测试
 
 验证 SQLite 升级后的数据层：
   - 数据库初始化 / 表自动创建
@@ -37,7 +37,7 @@ def _isolate():
     """创建隔离的临时数据目录并注入环境变量"""
     td = tempfile.mkdtemp(prefix="wc_db_test_")
     os.environ["LAS_DATA_DIR"] = td
-    os.environ["LAS_DB_PATH"] = os.path.join(td, "wordcosmos.db")
+    os.environ["LAS_DB_PATH"] = os.path.join(td, "knowsubtle.db")
     os.environ["METAGPT_STUBBED"] = "1"
     return td
 

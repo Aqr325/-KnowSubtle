@@ -1,5 +1,5 @@
 """
-WordCosmos Database Models — SQLAlchemy ORM
+KnowSubtle Database Models — SQLAlchemy ORM
 
 SQLite 数据库，异步引擎，支持桌面应用打包。
 所有 Model 对应原有的 JSON 实体。
