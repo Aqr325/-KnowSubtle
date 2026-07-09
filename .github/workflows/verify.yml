@@ -1,0 +1,51 @@
+name: Verify API (54-point suite)
+
+# 推送 main 或开 PR 时，自动启动后端（DEMO/离线模式）并跑 54 项端到端验证。
+# 任一功能失败 -> verify_all.py 以 exit(1) 退出 -> CI 标红，阻断合入。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime deps (demo/stub mode, no real metagpt)
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings python-multipart
+
+      - name: Start server + run 54-item verification
+        env:
+          METAGPT_STUBBED: "1"
+        run: |
+          set -e
+          nohup python app.py > server.log 2>&1 &
+          SRV=$!
+          # 轮询等待 health 就绪（最多 60s）
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/health || true)
+            if [ "$code" = "200" ]; then echo "HEALTH_OK after ~${i}s"; break; fi
+            sleep 1
+          done
+          # 跑全套验证，保留退出码
+          python verify_all.py
+          RC=$?
+          kill $SRV 2>/dev/null || true
+          exit $RC
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: server.log
