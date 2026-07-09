@@ -2,7 +2,7 @@ Runtime / vc_redist.exe
 ======================
 
 本目录用于放置 Visual C++ 可再发行组件（Microsoft Visual C++ 2019/2022 x64 Redistributable）。
-主程序（Core/main/main.exe，onedir 单文件夹）由 PyInstaller 打包，运行依赖本机已安装该组件。
+主程序（Core/KnowSubtle/KnowSubtle.exe，onedir 单文件夹）由 PyInstaller 打包，运行依赖本机已安装该组件。
 
 此外，桌面窗口由系统原生 WebView2 渲染（pywebview 调用，无浏览器地址栏/标签页）。Windows 10/11 通常已内置 WebView2 运行时；若缺失，主程序会自动回退打开默认浏览器访问 `http://127.0.0.1:8000/`，功能不受影响。
 

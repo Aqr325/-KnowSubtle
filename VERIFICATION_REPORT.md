@@ -1,4 +1,4 @@
-# WordCosmos 全功能验证报告（2026-07-09）
+# KnowSubtle 全功能验证报告（2026-07-09）
 
 ## 结论
 **源码与打包 exe 两套环境，均 54/54 项 PASS，0 失败。** 所有功能（演示端点 / 词库 CRUD / 目标 CRUD / 完整 AI 流水线及依赖会话端点）在模拟真实使用下均可用。
@@ -24,7 +24,7 @@
 
 ## 交付
 - 提交 `b25364ab` 推送 origin/main（app.py / orchestrator.py / schema.py / verify_all.py）。
-- 重建 `Release-Package/Core/main/main.exe`（含本轮修复）。
+- 重建 `Release-Package/Core/KnowSubtle/KnowSubtle.exe`（含本轮修复）。
 - 测试产物已清理，无残留进程。
 
 ## 教训

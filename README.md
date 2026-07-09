@@ -1,4 +1,4 @@
-# WordCosmos Learning Universe
+# KnowSubtle Learning Universe
 
 > 基于 MetaGPT 的个性化资源生成与学习多智能体系统
 
@@ -55,7 +55,7 @@ learning-agent-system/
 ├── README.md                     # 本文件
 ├── test_integration.py           # 集成测试脚本
 ├── dashboard/                    # 前端仪表板
-│   └── index.html                # WordCosmos 学习宇宙控制台（单 HTML 文件）
+│   └── index.html                # KnowSubtle 学习宇宙控制台（单 HTML 文件）
 ├── learning_agent_system/        # 主包
 │   ├── __init__.py
 │   ├── main.py                   # CLI 入口

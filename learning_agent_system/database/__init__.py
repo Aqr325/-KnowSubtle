@@ -1,4 +1,4 @@
-"""WordCosmos Database Layer"""
+"""KnowSubtle Database Layer"""
 
 from .models import Base, Session, LearningGoal, LearnerProfile, KnowledgeDiagnosis, ResourcePlan, LearningPath, LearningModule, TutorSession, ExerciseResult, Achievement, MistakeRecord, KnowledgeDecay, StudyStreak, MultiGoalProgress, Vocab, DailyStats, DailyWords, DailyAccuracy, DailyGoal
 from .session import get_engine, get_async_session, init_db
