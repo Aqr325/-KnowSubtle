@@ -83,8 +83,19 @@ logger = logging.getLogger("app")
 app = FastAPI(
     title="WordCosmos Learning Universe API",
     description="个性化资源生成与学习多智能体系统",
-    version="2.0.0"
+    version="3.0.0"
 )
+
+# ── 数据库初始化 ──
+from learning_agent_system.database.session import init_db, close_db, get_async_session
+
+@app.on_event("startup")
+async def startup_db():
+    await init_db()
+
+@app.on_event("shutdown")
+async def shutdown_db():
+    await close_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -963,87 +974,21 @@ import random
 import math
 from datetime import datetime, timedelta
 
-_STATS_FILE = STORAGE_DIR / "stats_history.json"
-
-
-def _atomic_write(path: Path, data: Any):
-    """原子写：先写同目录临时文件，再 os.replace 替换，避免半截写入与并发丢写。"""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def _load_stats_history() -> dict:
-    """加载历史统计数据"""
-    if _STATS_FILE.exists():
-        try:
-            return json.loads(_STATS_FILE.read_text(encoding="utf-8-sig"))
-        except Exception:
-            logger.exception("Failed to parse stats_history.json, returning defaults")
-    return {
-        "daily_minutes": [],
-        "daily_words": [],
-        "daily_accuracy": [],
-    }
-
-
-def _save_stats_history(data: dict):
-    _atomic_write(_STATS_FILE, data)
+# 数据库查询替代 JSON 文件
+from learning_agent_system.database.repo import StatsRepository, VocabRepository, DailyGoalRepository
 
 
 @app.get("/api/stats/dashboard")
 async def get_stats_dashboard() -> Dict[str, Any]:
     """学习分析仪表盘聚合数据"""
-    stats = _load_stats_history()
+    async with get_async_session() as session:
+        repo = StatsRepository(session)
+        summary = await repo.get_dashboard_summary()
+
     orch = get_orchestrator()
     ctx = None
     if _has_meaningful_session():
         ctx = _load_current_ctx()
-
-    # ── 每日学习时长曲线（过去14天） ──
-    today = datetime.now()
-    daily_minutes = stats.get("daily_minutes", [])
-    if not daily_minutes and ctx:
-        # 从 session 数据生成
-        day_records = {}
-        for r in ctx.exercise_results:
-            d = r.timestamp[:10] if hasattr(r, "timestamp") and r.timestamp else today.strftime("%Y-%m-%d")
-            day_records[d] = day_records.get(d, 0) + random.randint(5, 15)
-        for r in ctx.tutor_sessions:
-            d = today.strftime("%Y-%m-%d")
-            day_records[d] = day_records.get(d, 0) + random.randint(3, 8)
-        for d in range(13, -1, -1):
-            date_str = (today - timedelta(days=d)).strftime("%Y-%m-%d")
-            daily_minutes.append({"date": date_str, "minutes": day_records.get(date_str, 0)})
-    if not daily_minutes:
-        daily_minutes = []
-        for d in range(13, -1, -1):
-            date_str = (today - timedelta(days=d)).strftime("%m/%d")
-            daily_minutes.append({"date": date_str, "minutes": random.randint(0, 45)})
-
-    # ── 词汇量增长趋势（过去14天） ──
-    daily_words = stats.get("daily_words", [])
-    if not daily_words:
-        cumulative = 0
-        for d in range(13, -1, -1):
-            date_str = (today - timedelta(days=d)).strftime("%m/%d")
-            new_words = random.randint(3, 18) if d >= 10 else 0
-            cumulative += new_words
-            daily_words.append({"date": date_str, "new": new_words, "total": cumulative})
-
-    # ── 准确率变化（过去14天） ──
-    daily_accuracy = stats.get("daily_accuracy", [])
-    if not daily_accuracy:
-        base = 65
-        for d in range(13, -1, -1):
-            date_str = (today - timedelta(days=d)).strftime("%m/%d")
-            base = min(98, base + random.randint(-8, 10))
-            daily_accuracy.append({"date": date_str, "accuracy": max(40, base)})
-
-    # ── 当前汇总 ──
-    total_minutes = sum(m.get("minutes", 0) for m in daily_minutes)
-    total_words = daily_words[-1]["total"] if daily_words else 0
-    avg_accuracy = round(sum(a.get("accuracy", 0) for a in daily_accuracy) / len(daily_accuracy), 1) if daily_accuracy else 0
 
     streak = 0
     exercise_count = 0
@@ -1053,46 +998,16 @@ async def get_stats_dashboard() -> Dict[str, Any]:
         exercise_count = len(ctx.exercise_results)
         correct_count = sum(1 for r in ctx.exercise_results if r.is_correct)
 
-    # 持久化，避免每次刷新都用 random 重新编造（让仪表盘数据稳定可复现）
-    stats["daily_minutes"] = daily_minutes
-    stats["daily_words"] = daily_words
-    stats["daily_accuracy"] = daily_accuracy
-    _save_stats_history(stats)
+    summary["summary"]["streak"] = streak
+    summary["summary"]["exerciseCount"] = exercise_count
+    summary["summary"]["correctCount"] = correct_count
 
-    return {
-        "dailyMinutes": daily_minutes,
-        "dailyWords": daily_words,
-        "dailyAccuracy": daily_accuracy,
-        "summary": {
-            "totalMinutes": total_minutes,
-            "totalWords": total_words,
-            "avgAccuracy": avg_accuracy,
-            "streak": streak,
-            "exerciseCount": exercise_count,
-            "correctCount": correct_count,
-        },
-    }
+    return summary
 
 
 # ====================================================================
 # Vocabulary / Word Collection Endpoint
 # ====================================================================
-
-_VOCAB_FILE = STORAGE_DIR / "vocabulary.json"
-
-
-def _load_vocab() -> list:
-    if _VOCAB_FILE.exists():
-        try:
-            return json.loads(_VOCAB_FILE.read_text(encoding="utf-8-sig"))
-        except Exception:
-            logger.exception("Failed to parse vocabulary.json, returning empty list")
-    return []
-
-
-def _save_vocab(vocab: list):
-    _atomic_write(_VOCAB_FILE, vocab)
-
 
 class VocabEntry(BaseModel):
     word: str
@@ -1107,193 +1022,113 @@ class VocabEntry(BaseModel):
 @app.get("/api/vocab")
 async def get_vocab(subject: Optional[str] = None) -> List[Dict[str, Any]]:
     """获取收藏单词，可选按学科过滤"""
-    vocab = _load_vocab()
-    if subject:
-        vocab = [v for v in vocab if (v.get("subject") or "main") == subject]
-    return vocab
+    async with get_async_session() as session:
+        repo = VocabRepository(session)
+        words = await repo.get_by_subject(subject)
+    return [
+        {
+            "id": w.id,
+            "word": w.word,
+            "meaning": w.meaning,
+            "notes": w.notes,
+            "example": w.example,
+            "source": w.source,
+            "subject": w.subject,
+            "mastered": w.mastered,
+            "review_count": w.review_count,
+            "created_at": w.created_at.isoformat() if w.created_at else "",
+            "last_reviewed": w.last_reviewed,
+        }
+        for w in words
+    ]
 
 
 @app.post("/api/vocab")
 async def add_vocab(entry: VocabEntry) -> Dict[str, Any]:
-    """添加生词收藏"""
-    vocab = _load_vocab()
-    # 去重（同一学科内单词不重复；不同学科允许同词）
-    for v in vocab:
-        if v.get("word", "").lower() == entry.word.lower() and (v.get("subject") or "main") == entry.subject:
-            return {"status": "exists", "word": entry.word, "message": "该单词已在该学科收藏"}
-    new_entry = {
-        "id": (max([int(v.get("id", 0)) for v in vocab], default=0) + 1),
-        "word": entry.word,
-        "meaning": entry.meaning,
-        "notes": entry.notes,
-        "example": entry.example,
-        "source": entry.source,
-        "subject": entry.subject or "main",
-        "created_at": datetime.now().isoformat(),
-        "review_count": 0,
-        "mastered": False,
-    }
-    vocab.append(new_entry)
-    _save_vocab(vocab)
-    return {"status": "ok", "word": entry.word, "id": new_entry["id"]}
+    """添加生词收藏（按学科去重）"""
+    async with get_async_session() as session:
+        repo = VocabRepository(session)
+        word_obj, created = await repo.add(
+            word=entry.word,
+            meaning=entry.meaning,
+            notes=entry.notes,
+            example=entry.example,
+            source=entry.source,
+            subject=entry.subject,
+        )
+    if not created:
+        return {"status": "exists", "word": entry.word, "message": "该单词已在该学科收藏"}
+    return {"status": "ok", "word": entry.word, "id": word_obj.id}
 
 
 @app.put("/api/vocab/{word_id}")
 async def update_vocab(word_id: int, entry: VocabEntry) -> Dict[str, Any]:
     """更新单词笔记/掌握状态"""
-    vocab = _load_vocab()
-    for v in vocab:
-        if v.get("id") == word_id:
-            if entry.notes:
-                v["notes"] = entry.notes
-            if entry.meaning:
-                v["meaning"] = entry.meaning
-            if entry.example:
-                v["example"] = entry.example
-            if entry.mastered is not None:
-                v["mastered"] = entry.mastered
-            _save_vocab(vocab)
-            return {"status": "ok", "word": v["word"]}
-    raise HTTPException(status_code=404, detail=f"Word #{word_id} not found")
+    async with get_async_session() as session:
+        repo = VocabRepository(session)
+        v = await repo.get_by_id(word_id)
+        if not v:
+            raise HTTPException(status_code=404, detail=f"Word #{word_id} not found")
+
+        updates = {}
+        if entry.notes:
+            updates["notes"] = entry.notes
+        if entry.meaning:
+            updates["meaning"] = entry.meaning
+        if entry.example:
+            updates["example"] = entry.example
+        if entry.mastered is not None:
+            updates["mastered"] = entry.mastered
+
+        await repo.update(word_id, **updates)
+    return {"status": "ok", "word": v.word}
 
 
 @app.delete("/api/vocab/{word_id}")
 async def delete_vocab(word_id: int) -> Dict[str, Any]:
     """删除收藏单词"""
-    vocab = _load_vocab()
-    new_vocab = [v for v in vocab if v.get("id") != word_id]
-    if len(new_vocab) == len(vocab):
+    async with get_async_session() as session:
+        repo = VocabRepository(session)
+        ok = await repo.delete(word_id)
+    if not ok:
         raise HTTPException(status_code=404, detail=f"Word #{word_id} not found")
-    _save_vocab(new_vocab)
     return {"status": "deleted", "id": word_id}
 
 
 @app.post("/api/vocab/{word_id}/review")
 async def review_vocab(word_id: int) -> Dict[str, Any]:
     """记录一次复习"""
-    vocab = _load_vocab()
-    for v in vocab:
-        if v.get("id") == word_id:
-            v["review_count"] = v.get("review_count", 0) + 1
-            v["last_reviewed"] = datetime.now().isoformat()
-            _save_vocab(vocab)
-            return {"status": "ok", "word": v["word"], "review_count": v["review_count"]}
-    raise HTTPException(status_code=404, detail=f"Word #{word_id} not found")
+    async with get_async_session() as session:
+        repo = VocabRepository(session)
+        v = await repo.get_by_id(word_id)
+        if not v:
+            raise HTTPException(status_code=404, detail=f"Word #{word_id} not found")
+        await repo.record_review(word_id)
+        v.review_count += 1
+        v.last_reviewed = datetime.now().isoformat()
+    return {"status": "ok", "word": v.word, "review_count": v.review_count}
 
 
 @app.get("/api/vocab/stats")
 async def get_vocab_stats() -> Dict[str, Any]:
     """词库统计"""
-    vocab = _load_vocab()
-    total = len(vocab)
-    mastered = sum(1 for v in vocab if v.get("mastered"))
-    need_review = sum(1 for v in vocab if v.get("review_count", 0) == 0)
-    return {
-        "total": total,
-        "mastered": mastered,
-        "needReview": need_review,
-        "sources": {},
-    }
+    async with get_async_session() as session:
+        repo = VocabRepository(session)
+        stats = await repo.get_stats()
+    return {**stats, "sources": {}}
 
 
 @app.get("/api/vocab/due-review")
 async def get_vocab_due_review() -> Dict[str, Any]:
     """艾宾浩斯遗忘曲线复习推荐 — 计算哪些单词需要复习"""
-    import math
-    from datetime import datetime, timedelta
-
-    vocab = _load_vocab()
-    now = datetime.now()
-
-    # 艾宾浩斯复习间隔（天）：首次学习后 1天、2天、4天、7天、15天、30天
-    ebbinghaus_intervals = [1, 2, 4, 7, 15, 30]
-
-    due_words = []
-    mastered_safe = []
-
-    for v in vocab:
-        if v.get("mastered"):
-            mastered_safe.append(v)
-            continue
-
-        created = v.get("created_at")
-        last_reviewed = v.get("last_reviewed")
-        review_count = v.get("review_count", 0)
-
-        if review_count == 0:
-            # 从未复习 — 立即催复习
-            due_words.append({
-                "id": v["id"],
-                "word": v["word"],
-                "meaning": v.get("meaning", ""),
-                "urgency": "high",
-                "reason": "从未复习",
-                "next_interval_days": 1,
-                "retention_estimate": 30.0,
-            })
-            continue
-
-        # 计算上次复习距今天数
-        try:
-            ref_date = datetime.fromisoformat(last_reviewed) if last_reviewed else datetime.fromisoformat(created)
-        except Exception:
-            ref_date = now
-        days_since = (now - ref_date).days
-
-        # 根据复习次数决定下一个复习间隔
-        next_interval = ebbinghaus_intervals[min(review_count - 1, len(ebbinghaus_intervals) - 1)]
-
-        # 记忆保持率 = 100 * e^(-days/5)
-        retention = round(max(5, 100 * math.exp(-days_since / 5)), 1)
-
-        if days_since >= next_interval:
-            due_words.append({
-                "id": v["id"],
-                "word": v["word"],
-                "meaning": v.get("meaning", ""),
-                "urgency": "high" if days_since >= next_interval * 2 else "medium",
-                "reason": f"距上次复习 {days_since} 天，已超间隔 {next_interval} 天",
-                "next_interval_days": ebbinghaus_intervals[min(review_count, len(ebbinghaus_intervals) - 1)],
-                "retention_estimate": retention,
-            })
-
-    # 按急迫性排序
-    urgency_order = {"high": 0, "medium": 1}
-    due_words.sort(key=lambda w: urgency_order.get(w["urgency"], 2))
-
-    return {
-        "due_today": len(due_words),
-        "mastered": len(mastered_safe),
-        "total": len(vocab),
-        "words": due_words,
-        "intervals": ebbinghaus_intervals,
-    }
+    async with get_async_session() as session:
+        repo = VocabRepository(session)
+        return await repo.get_due_review()
 
 
 # ====================================================================
 # Daily Goals Endpoint
 # ====================================================================
-
-_GOALS_FILE = STORAGE_DIR / "daily_goals.json"
-
-
-def _load_goals() -> dict:
-    if _GOALS_FILE.exists():
-        try:
-            return json.loads(_GOALS_FILE.read_text(encoding="utf-8-sig"))
-        except Exception:
-            logger.exception("Failed to parse daily_goals.json, returning defaults")
-    return {
-        "daily_pomodoros": 4,
-        "daily_words": 20,
-        "daily_minutes": 60,
-        "history": {},
-    }
-
-
-def _save_goals(goals: dict):
-    _atomic_write(_GOALS_FILE, goals)
-
 
 class GoalSetting(BaseModel):
     daily_pomodoros: int = 4
@@ -1304,58 +1139,38 @@ class GoalSetting(BaseModel):
 @app.get("/api/goals")
 async def get_goals() -> Dict[str, Any]:
     """获取每日目标设定"""
-    return _load_goals()
+    async with get_async_session() as session:
+        repo = DailyGoalRepository(session)
+        target = await repo.get_target()
+    return target
 
 
 @app.put("/api/goals")
 async def update_goals(goal: GoalSetting) -> Dict[str, Any]:
     """更新每日目标"""
-    goals = _load_goals()
-    goals["daily_pomodoros"] = goal.daily_pomodoros
-    goals["daily_words"] = goal.daily_words
-    goals["daily_minutes"] = goal.daily_minutes
-    _save_goals(goals)
-    return {"status": "ok", **goals}
+    async with get_async_session() as session:
+        repo = DailyGoalRepository(session)
+        await repo.update_target(goal.daily_pomodoros, goal.daily_words, goal.daily_minutes)
+        target = await repo.get_target()
+    return {"status": "ok", **target}
 
 
 @app.get("/api/goals/today")
 async def get_today_progress() -> Dict[str, Any]:
     """获取今日进度"""
-    goals = _load_goals()
-    today_key = datetime.now().strftime("%Y-%m-%d")
-    history = goals.get("history", {})
-    today_record = history.get(today_key, {
-        "pomodoros_done": 0,
-        "words_learned": 0,
-        "minutes_studied": 0,
-    })
-
-    return {
-        "target": {
-            "pomodoros": goals.get("daily_pomodoros", 4),
-            "words": goals.get("daily_words", 20),
-            "minutes": goals.get("daily_minutes", 60),
-        },
-        "progress": today_record,
-        "date": today_key,
-    }
+    async with get_async_session() as session:
+        repo = DailyGoalRepository(session)
+        return await repo.get_today_progress()
 
 
 @app.post("/api/goals/today/progress")
 async def update_today_progress(data: Dict[str, Any]) -> Dict[str, Any]:
     """更新今日进度（增量）"""
-    goals = _load_goals()
-    today_key = datetime.now().strftime("%Y-%m-%d")
-    history = goals.setdefault("history", {})
-    record = history.get(today_key, {
-        "pomodoros_done": 0, "words_learned": 0, "minutes_studied": 0
-    })
-    record["pomodoros_done"] = record.get("pomodoros_done", 0) + data.get("pomodoros", 0)
-    record["words_learned"] = record.get("words_learned", 0) + data.get("words", 0)
-    record["minutes_studied"] = record.get("minutes_studied", 0) + data.get("minutes", 0)
-    history[today_key] = record
-    _save_goals(goals)
-    return {"status": "ok", "progress": record}
+    async with get_async_session() as session:
+        repo = DailyGoalRepository(session)
+        await repo.update_today_progress(**data)
+        progress = await repo.get_today_progress()
+    return {"status": "ok", "progress": progress["progress"]}
 
 
 # ====================================================================
@@ -1364,7 +1179,7 @@ async def update_today_progress(data: Dict[str, Any]) -> Dict[str, Any]:
 
 @app.get("/api/health")
 async def health_check() -> Dict[str, str]:
-    return {"status": "ok", "service": "WordCosmos Learning Universe API", "version": "2.0.0"}
+    return {"status": "ok", "service": "WordCosmos Learning Universe API", "version": "3.0.0"}
 
 
 # ====================================================================
@@ -1372,6 +1187,10 @@ async def health_check() -> Dict[str, str]:
 # ====================================================================
 
 DASHBOARD_DIR = RESOURCE_DIR
+
+@app.on_event("shutdown")
+async def shutdown_db():
+    await close_db()
 
 @app.get("/")
 async def serve_dashboard():
