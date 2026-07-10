@@ -3169,7 +3169,7 @@
             '试试把大目标拆解成每日小任务，每完成一个就打勾，成就感满满。',
             '建议你在精力最好的时段做最难的内容，效率翻倍。'
           ],
-          baseUrl: '', apiKey: ''
+          baseUrl: '', apiKey: '', model: 'gpt-4o'
         },
         { id: 'rhea', name: 'Rhea', cn: '资源师', avatar: '&#128218;', color: '#F472B6', role: '资源推荐师', specialty: '优质资源 · 资料库',
           greeting: 'Hi！我是 Rhea，你的个人资源顾问。海量学习资料已为你整理分类，想探索哪个领域？',
@@ -3179,7 +3179,7 @@
             '根据你的偏好，我筛选了 2 个优质视频课程，评分都在 4.8 以上。',
             '要不要试试我新整理的思维导图？把零散知识点串联起来。'
           ],
-          baseUrl: '', apiKey: ''
+          baseUrl: '', apiKey: '', model: 'gpt-4o'
         },
         { id: 'eva', name: 'Eva', cn: '评测师', avatar: '&#128300;', color: '#A78BFA', role: '学习评测师', specialty: '效果评估 · 反馈分析',
           greeting: '你好！我是 Eva，你的学习评估专家。通过数据精准分析你的进步轨迹，让每一步都看得见。',
@@ -3189,7 +3189,7 @@
             '本周学习效率提升了 23%，你的番茄钟完成率是 92%，很棒！',
             '根据艾宾浩斯遗忘曲线，今天有 12 个词需要复习，我帮你排好了。'
           ],
-          baseUrl: '', apiKey: ''
+          baseUrl: '', apiKey: '', model: 'gpt-4o'
         },
         { id: 'socrates', name: 'Socrates', cn: '导师', avatar: '&#129518;', color: '#34D399', role: '学习导师', specialty: '启发引导 · 答疑解惑',
           greeting: '很高兴见到你！我是 Socrates，你的私人导师。不直接给答案，而是引导你发现真相。准备好开始思辨了吗？',
@@ -3199,7 +3199,7 @@
             '让我问一个问题：你觉得这个概念的核心是什么？',
             '你答对了！现在试着把这个方法应用到另一个场景中去。'
           ],
-          baseUrl: '', apiKey: ''
+          baseUrl: '', apiKey: '', model: 'gpt-4o'
         },
         { id: 'alex', name: 'Alex', cn: '画像师', avatar: '&#128100;', color: '#FBBF24', role: '学习画像师', specialty: '个性分析 · 成长档案',
           greeting: 'Hi！我是 Alex，你的学习画像师。通过数据为你绘制最精准的学习者画像，让优势更突出。',
@@ -3209,7 +3209,7 @@
             '你的最佳学习时段是上午 9-11 点，建议把最难的任务安排在这个时间。',
             '你的学习曲线呈现稳步上升趋势，预测两周后可以突破瓶颈期。'
           ],
-          baseUrl: '', apiKey: ''
+          baseUrl: '', apiKey: '', model: 'gpt-4o'
         },
         { id: 'kai', name: 'Kai', cn: '知识官', avatar: '&#129509;', color: '#60A5FA', role: '知识官', specialty: '知识管理 · 问答引擎',
           greeting: '你好！我是 Kai，你的知识官。海量知识库随时待命，任何疑问都能快速定位答案。',
@@ -3219,7 +3219,7 @@
             '这是经典知识点，我帮你关联了 5 个相关主题，形成知识网络。',
             '答案已收录到知识库，建议你收藏到"重点回顾"分类中。'
           ],
-          baseUrl: '', apiKey: ''
+          baseUrl: '', apiKey: '', model: 'gpt-4o'
         }
       ];
     }
@@ -3243,7 +3243,8 @@
         greeting: o.greeting || def.greeting,
         replies: o.replies || def.replies,
         baseUrl: o.baseUrl || def.baseUrl,
-        apiKey: o.apiKey || def.apiKey
+        apiKey: o.apiKey || def.apiKey,
+        model: o.model || def.model || 'gpt-4o'
       };
     });
 
@@ -3408,7 +3409,8 @@
         '<div style="margin: 18px 0 10px 0;" class="config-section-title">大模型接入配置</div>' +
         '<div class="config-row"><label>API Base URL</label><input type="text" id="cfgBaseUrl" placeholder="例如：https://api.openai.com/v1" value="' + escHtml(a.baseUrl || '') + '"></div>' +
         '<div class="config-row"><label>API Key</label><input type="password" id="cfgApiKey" placeholder="sk-..." value="' + escHtml(a.apiKey || '') + '"></div>' +
-        '<div class="config-hint">配置后智能体将调用真实的大模型 API 进行回复。留空则使用模拟回复。</div>';
+        '<div class="config-row"><label>模型名称</label><input type="text" id="cfgModel" placeholder="例如：gpt-4o（Agnes 填对应模型名）" value="' + escHtml(a.model || 'gpt-4o') + '"></div>' +
+        '<div class="config-hint">配置后智能体将调用真实的大模型 API 进行回复。留空则使用模拟回复。<b>模型名称必填</b>，否则接口会返回「模型名称不能为空」。</div>';
 
       var list = $('#repliesList');
       a.replies.forEach(function(r, i) {
@@ -3465,8 +3467,12 @@
 
     function callLLMApi(agent, userMessage, onSuccess, onError) {
       var apiUrl = agent.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+      if (!agent.model || !agent.model.trim()) {
+        onError('未填写模型名称（在智能体配置中填写，例如 gpt-4o 或 Agnes 对应模型名）');
+        return;
+      }
       var payload = {
-        model: agent.model || '',
+        model: agent.model,
         messages: [
           { role: 'system', content: agent.name + ' (' + agent.cn + ') — ' + agent.role + '，专长：' + agent.specialty + '。请用专业但友好的语气回复。' },
           { role: 'user', content: userMessage }
@@ -3515,6 +3521,7 @@
       var greeting = $('#cfgGreeting').value.trim();
       var baseUrl = ($('#cfgBaseUrl').value || '').trim();
       var apiKey = ($('#cfgApiKey').value || '').trim();
+      var model = ($('#cfgModel').value || '').trim();
       if (!name) name = a.name;
       if (!cn) cn = a.cn;
       if (!role) role = a.role;
@@ -3530,13 +3537,13 @@
       });
 
       // Apply to AGENTS array
-      Object.assign(a, { name: name, cn: cn, role: role, specialty: specialty, greeting: greeting, replies: replies, baseUrl: baseUrl, apiKey: apiKey });
+      Object.assign(a, { name: name, cn: cn, role: role, specialty: specialty, greeting: greeting, replies: replies, baseUrl: baseUrl, apiKey: apiKey, model: model });
 
       // Save to localStorage overrides
       AGENT_OVERRIDES[CURRENT_AGENT] = {
         name: name, cn: cn, role: role, specialty: specialty,
         greeting: greeting, replies: replies,
-        baseUrl: baseUrl, apiKey: apiKey
+        baseUrl: baseUrl, apiKey: apiKey, model: model
       };
       localStorage.setItem('wc_agents_config', JSON.stringify(AGENT_OVERRIDES));
 
@@ -3567,7 +3574,8 @@
           greeting: o.greeting || d.greeting,
           replies: o.replies || d.replies,
           baseUrl: o.baseUrl || d.baseUrl,
-          apiKey: o.apiKey || d.apiKey
+          apiKey: o.apiKey || d.apiKey,
+          model: o.model || d.model || 'gpt-4o'
         };
       });
 
