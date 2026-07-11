@@ -38,7 +38,7 @@ import os
 from pathlib import Path
 
 from learning_agent_system.orchestrator import TeamOrchestrator, Phase, SessionContext
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from learning_agent_system.schema import (
     LearningGoal,
@@ -99,11 +99,23 @@ async def shutdown_db():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:8000", "http://localhost:8001", "http://localhost:8002",
+        "http://127.0.0.1:8000", "http://127.0.0.1:8001", "http://127.0.0.1:8002",
+        "null",
+    ],
     allow_credentials=False,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+from fastapi.responses import JSONResponse
+from fastapi import Request
+
+@app.exception_handler(Exception)
+async def _unhandled_exception(request: Request, exc: Exception):
+    logger.error("Unhandled exception: %s", exc, exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "服务器内部错误，请稍后重试"})
 
 CSP_POLICY = os.environ.get(
     "CSP_POLICY",
@@ -425,9 +437,9 @@ async def toggle_task(planet_id: int, task_id: int) -> Dict[str, Any]:
     if not ctx or not ctx.learning_path:
         raise HTTPException(status_code=400, detail="学习路径尚未生成，请先运行学习流水线。")
 
-    task = ctx.learning_path.modules[task_id - 1] if task_id <= len(ctx.learning_path.modules) else None
-    if not task:
+    if task_id < 1 or task_id > len(ctx.learning_path.modules):
         raise HTTPException(status_code=404, detail=f"Task #{task_id} not found")
+    task = ctx.learning_path.modules[task_id - 1]
 
     # 切换状态（使用枚举值，避免字符串赋值类型问题）
     if task.status == ModuleStatus.COMPLETED:
@@ -817,7 +829,7 @@ async def get_report_card() -> Dict[str, Any]:
         return serialize(report)
     except Exception as e:
         logger.error(f"Report card generation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate report card: {str(e)}")
+        raise HTTPException(status_code=500, detail="生成报告卡失败，请稍后重试")
 
 
 # ====================================================================
@@ -844,7 +856,7 @@ async def submit_exercise(answer: ExerciseAnswerRequest) -> Dict[str, Any]:
         return serialize(result)
     except Exception as e:
         logger.error(f"Exercise evaluation failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="练习评测失败，请稍后重试")
 
 
 @app.get("/api/exercises")
@@ -1010,10 +1022,10 @@ async def get_stats_dashboard() -> Dict[str, Any]:
 # ====================================================================
 
 class VocabEntry(BaseModel):
-    word: str
-    meaning: str = ""
-    notes: str = ""
-    example: str = ""
+    word: str = Field(..., max_length=128)
+    meaning: str = Field("", max_length=2000)
+    notes: str = Field("", max_length=2000)
+    example: str = Field("", max_length=2000)
     source: str = "manual"  # manual | tutor | exercise
     subject: str = "main"   # main | english | programming | history
     mastered: Optional[bool] = None
@@ -1088,6 +1100,10 @@ async def update_vocab(word_id: int, entry: VocabUpdateEntry) -> Dict[str, Any]:
             updates["meaning"] = entry.meaning
         if entry.example:
             updates["example"] = entry.example
+        if entry.source:
+            updates["source"] = entry.source
+        if entry.subject:
+            updates["subject"] = entry.subject
         if entry.mastered is not None:
             updates["mastered"] = entry.mastered
 
@@ -1114,9 +1130,7 @@ async def review_vocab(word_id: int) -> Dict[str, Any]:
         v = await repo.get_by_id(word_id)
         if not v:
             raise HTTPException(status_code=404, detail=f"Word #{word_id} not found")
-        await repo.record_review(word_id)
-        v.review_count += 1
-        v.last_reviewed = datetime.now().isoformat()
+        v = await repo.record_review(word_id)
     return {"status": "ok", "word": v.word, "review_count": v.review_count}
 
 
@@ -1174,12 +1188,35 @@ async def get_today_progress() -> Dict[str, Any]:
         return await repo.get_today_progress()
 
 
+class ProgressUpdate(BaseModel):
+    pomodoros: Optional[int] = None
+    words: Optional[int] = None
+    minutes: Optional[int] = None
+
+    @field_validator("pomodoros", "words", "minutes", mode="before")
+    @classmethod
+    def _non_neg_int(cls, v):
+        if v is None:
+            return v
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            raise ValueError("进度值必须为整数")
+        if iv < 0:
+            raise ValueError("进度值不能为负数")
+        return iv
+
+
 @app.post("/api/goals/today/progress")
-async def update_today_progress(data: Dict[str, Any]) -> Dict[str, Any]:
-    """更新今日进度（增量）"""
+async def update_today_progress(data: ProgressUpdate) -> Dict[str, Any]:
+    """更新今日进度（增量，校验非负整数）"""
     async with get_async_session() as session:
         repo = DailyGoalRepository(session)
-        await repo.update_today_progress(**data)
+        await repo.update_today_progress(
+            pomodoros=data.pomodoros or 0,
+            words=data.words or 0,
+            minutes=data.minutes or 0,
+        )
         progress = await repo.get_today_progress()
     return {"status": "ok", "progress": progress["progress"]}
 
@@ -1260,7 +1297,9 @@ if __name__ == "__main__":
         uvicorn.run(app, host=host, port=port)
     except OSError as e:
         msg = str(e).lower()
-        if "address already in use" in msg or "only one usage" in msg:
+        # 兼容 Windows(WinError 10048) 与类 Unix 的端口占用提示
+        if "address already in use" in msg or "only one usage" in msg \
+                or "10048" in msg or "address" in msg:
             port = port + 1
             logger.warning(f"端口 {port-1} 被占用，回退到端口 {port}")
             uvicorn.run(app, host=host, port=port)

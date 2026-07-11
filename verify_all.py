@@ -136,11 +136,23 @@ check("goals PUT", "PUT", "/api/goals",
       validator=lambda s, j, r: (j.get("daily_pomodoros") == 6, str(j)), phase="C")
 check("goals GET(after)", "GET", "/api/goals",
       validator=lambda s, j, r: (j.get("daily_pomodoros") == 6 and j.get("daily_words") == 30, str(j)), phase="C")
+# 捕获进度基线：端点为「累加」语义（修复并发丢更新），断言增量而非精确值，
+# 这样无论库是否全新都能正确验证（before + delta == after）
+_, _, jb = check("goals/today(baseline)", "GET", "/api/goals/today",
+      validator=lambda s, j, r: (isinstance(j, dict) and "progress" in j, "ok"), phase="C")
+_base = (jb or {}).get("progress", {}) if isinstance(jb, dict) else {}
+_base_pomo = int(_base.get("pomodoros_done", 0) or 0)
+_base_words = int(_base.get("words_learned", 0) or 0)
+_base_mins = int(_base.get("minutes_studied", 0) or 0)
 check("goals/today progress(+)", "POST", "/api/goals/today/progress",
       body={"pomodoros": 2, "words": 10, "minutes": 25},
       validator=lambda s, j, r: (j.get("status") == "ok", str(j)), phase="C")
 okg, _, jg = check("goals/today(after)", "GET", "/api/goals/today",
-      validator=lambda s, j, r: (j.get("progress", {}).get("pomodoros_done", 0) == 2 and j.get("progress", {}).get("words_learned", 0) == 10, str(j.get("progress"))), phase="C")
+      validator=lambda s, j, r: (
+          j.get("progress", {}).get("pomodoros_done", 0) == _base_pomo + 2 and
+          j.get("progress", {}).get("words_learned", 0) == _base_words + 10 and
+          j.get("progress", {}).get("minutes_studied", 0) == _base_mins + 25,
+          str(j.get("progress"))), phase="C")
 
 
 # =====================================================================
