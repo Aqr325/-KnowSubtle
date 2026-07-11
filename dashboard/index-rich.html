@@ -3761,8 +3761,8 @@
         var item = State.vocab.find(function(v){return v.word===word;});
         if (item) {
           var ret = Math.round((item.retention||0.5)*100);
-          showDetailPopup('<span>'+word+'</span>',
-            '<div class="detail-stat"><span>释义</span><span>'+(item.meaning||'暂无')+'</span></div>' +
+          showDetailPopup('<span>'+escHtml(word)+'</span>',
+            '<div class="detail-stat"><span>释义</span><span>'+escHtml(item.meaning||'暂无')+'</span></div>' +
             '<div class="detail-stat"><span>复习次数</span><span>'+(item.review_count||0)+'</span></div>' +
             '<div class="detail-stat"><span>保留率</span><span>'+ret+'%</span></div>' +
             '<div class="detail-stat"><span>状态</span><span>'+(item.mastered?'已掌握':'学习中')+'</span></div>');

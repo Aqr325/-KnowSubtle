@@ -611,8 +611,8 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
       div.className = 'vocab-item' + (v.mastered ? ' mastered' : '');
       var retPct = Math.round((v.retention || 0.5) * 100);
       div.innerHTML =
-        '<div class="word">' + (v.word||'') + '</div>' +
-        '<div class="meta">' + (v.meaning||'') + '</div>' +
+        '<div class="word">' + escHtml(v.word||'') + '</div>' +
+        '<div class="meta">' + escHtml(v.meaning||'') + '</div>' +
         '<div class="retention-bar"><div class="retention-fill" style="width:' + retPct + '%"></div></div>' +
         '<div class="actions">' +
           '<button class="mark-btn" data-id="' + (v.id||'') + '">' + (v.mastered ? '已掌握' : '标记') + '</button>' +
@@ -644,7 +644,7 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
       tasks.forEach(function(t, idx) {
         var item = document.createElement('div');
         item.className = 'task-item' + (t.done ? ' done' : '');
-        item.innerHTML = '<div class="checkbox"></div><span class="text">' + (t.text||'') + '</span>';
+        item.innerHTML = '<div class="checkbox"></div><span class="text">' + escHtml(t.text||'') + '</span>';
         item.addEventListener('click', function() {
           t.done = !t.done;
           item.classList.toggle('done', t.done);
@@ -669,8 +669,8 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
         var pct = a.unlocked ? 100 : Math.round((a.progress || 0) / Math.max(a.target || 100, 1) * 100);
         card.innerHTML =
           '<div style="font-size:28px;margin-bottom:6px">' + (a.unlocked ? (a.icon || '&#127942;') : '&#128274;') + '</div>' +
-          '<div style="font-size:13px;font-weight:600">' + (a.title || a.name || '未知') + '</div>' +
-          '<div style="font-size:11px;color:var(--text-dimmed);margin-top:4px">' + (a.description || '') + '</div>' +
+          '<div style="font-size:13px;font-weight:600">' + escHtml(a.title || a.name || '未知') + '</div>' +
+          '<div style="font-size:11px;color:var(--text-dimmed);margin-top:4px">' + escHtml(a.description || '') + '</div>' +
           (a.unlocked ? '<div style="font-size:10px;color:var(--color-primary);margin-top:4px">已解锁</div>' :
             '<div style="height:4px;background:rgba(255,255,255,0.06);border-radius:2px;margin-top:6px"><div style="height:100%;width:' + pct + '%;background:var(--color-primary);border-radius:2px"></div></div>') +
           '<div style="font-size:10px;color:var(--text-dimmed);margin-top:4px">' + pct + '%</div>';
