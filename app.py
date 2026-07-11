@@ -1094,15 +1094,15 @@ async def update_vocab(word_id: int, entry: VocabUpdateEntry) -> Dict[str, Any]:
             raise HTTPException(status_code=404, detail=f"Word #{word_id} not found")
 
         updates = {}
-        if entry.notes:
+        if entry.notes is not None:
             updates["notes"] = entry.notes
-        if entry.meaning:
+        if entry.meaning is not None:
             updates["meaning"] = entry.meaning
-        if entry.example:
+        if entry.example is not None:
             updates["example"] = entry.example
-        if entry.source:
+        if entry.source is not None:
             updates["source"] = entry.source
-        if entry.subject:
+        if entry.subject is not None:
             updates["subject"] = entry.subject
         if entry.mastered is not None:
             updates["mastered"] = entry.mastered
