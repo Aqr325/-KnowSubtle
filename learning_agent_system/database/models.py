@@ -285,6 +285,7 @@ class Vocab(Base):
     mastered: bool = Column(Boolean, default=False)
     review_count: int = Column(Integer, default=0)
     last_reviewed: str = Column(String(32), default="")
+    word_lower: str = Column(String(128), default=None, nullable=True)
     created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
 
     __table_args__ = (

@@ -90,6 +90,25 @@ DB_PATH: Path = _resolve_db_path()
 DB_URL = f"sqlite+aiosqlite:///{DB_PATH}"
 
 
+from sqlalchemy import event as _sa_event
+
+
+def _on_connect_fk(dbapi_conn, conn_record):
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA foreign_keys=ON")
+    finally:
+        cur.close()
+
+
+def _enable_foreign_keys(engine):
+    try:
+        sync_engine = engine.sync_engine if hasattr(engine, "sync_engine") else engine
+        _sa_event.listen(sync_engine, "connect", _on_connect_fk)
+    except Exception:
+        pass
+
+
 async def get_engine():
     """获取或创建异步引擎（单例）"""
     global _async_engine, _async_session_factory
@@ -102,6 +121,7 @@ async def get_engine():
             max_overflow=10,
             pool_pre_ping=True,
         )
+        _enable_foreign_keys(_async_engine)
         _async_session_factory = async_sessionmaker(
             _async_engine,
             class_=AsyncSession,
@@ -117,6 +137,7 @@ def get_sync_engine():
         from sqlalchemy import create_engine as _create_sync
         from sqlalchemy.orm import sessionmaker as _sync_sessionmaker
         _sync_engine = _create_sync(f"sqlite:///{DB_PATH}", echo=False, future=True)
+        _enable_foreign_keys(_sync_engine)
         _sync_session_factory = _sync_sessionmaker(_sync_engine, expire_on_commit=False)
     return _sync_engine
 
@@ -149,6 +170,19 @@ async def init_db(migrate: bool = True):
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA synchronous=NORMAL"))
         await conn.execute(text("PRAGMA foreign_keys=ON"))
+        # 为所有含 session_id 的表补充索引（避免按 session_id 查询/级联删除全表扫描）
+        for tname, table in Base.metadata.tables.items():
+            if "session_id" in table.columns:
+                idx = f"ix_{tname}_session_id"
+                await conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx} ON {tname}(session_id)"))
+        # 词库大小写不敏感去重索引 + word_lower 列迁移
+        # 注意：必须先确保 word_lower 列存在（已有库 create_all 不会补列），再回填，最后建索引
+        _cols = [r[1] for r in (await conn.execute(text("PRAGMA table_info(vocab)"))).fetchall()]
+        if "word_lower" not in _cols:
+            await conn.execute(text("ALTER TABLE vocab ADD COLUMN word_lower VARCHAR"))
+        await conn.execute(text("UPDATE vocab SET word_lower = lower(word) WHERE word_lower IS NULL"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_vocab_word_lower ON vocab(word_lower, subject)"))
+        await conn.execute(text("PRAGMA busy_timeout=5000"))
 
     logger.info(f"数据库初始化完成: {DB_PATH}")
 

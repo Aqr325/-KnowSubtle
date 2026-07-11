@@ -106,33 +106,41 @@ class SessionRepository:
         await self._session.refresh(s)
         return s
 
+    async def _get_session_light(self, session_id: str):
+        result = await self._session.execute(
+            select(Session).where(Session.session_id == session_id)
+        )
+        return result.scalar_one_or_none()
+
     async def update_phase(self, session_id: str, phase: str):
-        """更新会话阶段"""
-        s = await self.get_session_by_id(session_id)
+        """更新会话阶段（轻量，不加载整图）"""
+        s = await self._get_session_light(session_id)
         if s:
             s.current_phase = phase
             s.updated_at = datetime.now()
             await self._session.commit()
 
     async def save_study_streak(self, session_id: str, streak_data: Dict[str, Any]):
-        """保存/更新 StudyStreak"""
-        s = await self.get_session_by_id(session_id)
+        """保存/更新 StudyStreak（轻量）"""
+        s = await self._get_session_light(session_id)
         if not s:
             return
-        streak = s.study_streak
-        if not streak:
+        if s.study_streak is None:
             streak = StudyStreak(session_id=s.id, **streak_data)
             s.study_streak = streak
             self._session.add(streak)
         else:
             for k, v in streak_data.items():
-                setattr(streak, k, v)
+                setattr(s.study_streak, k, v)
         await self._session.commit()
 
     async def get_study_streak(self, session_id: str) -> Optional[StudyStreak]:
-        """获取 StudyStreak"""
-        s = await self.get_session_by_id(session_id)
-        return s.study_streak if s else None
+        """获取 StudyStreak（轻量）"""
+        s = await self._get_session_light(session_id)
+        if not s:
+            return None
+        await self._session.refresh(s, ["study_streak"])
+        return s.study_streak
 
     async def add_achievement(self, session_id: str, ach: Achievement) -> Achievement:
         """添加成就"""
@@ -248,14 +256,14 @@ class VocabRepository:
         """
         existing = await self._session.scalar(
             select(Vocab).where(
-                and_(func.lower(Vocab.word) == word.lower(), Vocab.subject == subject)
+                and_(Vocab.word_lower == word.lower(), Vocab.subject == subject)
             )
         )
         if existing:
             return existing, False
 
         v = Vocab(
-            word=word, meaning=meaning, notes=notes, example=example,
+            word=word, word_lower=word.lower(), meaning=meaning, notes=notes, example=example,
             source=source, subject=subject, mastered=mastered,
             created_at=datetime.now(),
         )
@@ -284,15 +292,17 @@ class VocabRepository:
         await self._session.commit()
         return True
 
-    async def record_review(self, word_id: int) -> bool:
-        """记录一次复习"""
-        v = await self.get_by_id(word_id)
-        if not v:
-            return False
-        v.review_count += 1
-        v.last_reviewed = _now()
+    async def record_review(self, word_id: int):
+        """记录一次复习（原子自增），返回更新后的 Vocab 或 None"""
+        from sqlalchemy import update as _sa_update
+        await self._session.execute(
+            _sa_update(Vocab).where(Vocab.id == word_id).values(
+                review_count=Vocab.review_count + 1,
+                last_reviewed=_now(),
+            )
+        )
         await self._session.commit()
-        return True
+        return await self.get_by_id(word_id)
 
     async def get_stats(self) -> Dict[str, int]:
         """词库统计"""
@@ -322,7 +332,7 @@ class VocabRepository:
         due_words = []
         # 获取未掌握的词
         result = await self._session.execute(
-            select(Vocab).where(Vocab.mastered == False)
+            select(Vocab).where(Vocab.mastered == False).limit(500)
         )
         unmastered = result.scalars().all()
 
@@ -556,26 +566,26 @@ class DailyGoalRepository:
             "date": today,
         }
 
-    async def update_today_progress(self, **kwargs):
-        """更新今日进度（增量）"""
+    async def update_today_progress(self, pomodoros: int = 0, words: int = 0, minutes: int = 0):
+        """更新今日进度（原子增量，避免并发读-改-写覆盖）"""
+        from sqlalchemy import update as _sa_update, func as _sa_func
         today = datetime.now().strftime("%Y-%m-%d")
-        result = await self._session.execute(
-            select(DailyGoal).where(DailyGoal.date == today)
-        )
-        dg = result.scalar_one_or_none()
-        if not dg:
-            dg = DailyGoal(
-                date=today, pomodoros_done=0, words_done=0, minutes_done=0,
-            )
-            self._session.add(dg)
-
-        if "pomodoros" in kwargs:
-            dg.pomodoros_done = (dg.pomodoros_done or 0) + kwargs["pomodoros"]
-        if "words" in kwargs:
-            dg.words_done = (dg.words_done or 0) + kwargs["words"]
-        if "minutes" in kwargs:
-            dg.minutes_done = (dg.minutes_done or 0) + kwargs["minutes"]
-
+        vals = {}
+        if pomodoros:
+            vals["pomodoros_done"] = _sa_func.coalesce(DailyGoal.pomodoros_done, 0) + pomodoros
+        if words:
+            vals["words_done"] = _sa_func.coalesce(DailyGoal.words_done, 0) + words
+        if minutes:
+            vals["minutes_done"] = _sa_func.coalesce(DailyGoal.minutes_done, 0) + minutes
+        if not vals:
+            return
+        stmt = _sa_update(DailyGoal).where(DailyGoal.date == today).values(**vals)
+        res = await self._session.execute(stmt)
+        if res.rowcount == 0:
+            self._session.add(DailyGoal(
+                date=today,
+                pomodoros_done=pomodoros, words_done=words, minutes_done=minutes,
+            ))
         await self._session.commit()
 
 

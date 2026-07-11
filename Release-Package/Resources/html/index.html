@@ -2222,6 +2222,7 @@
     0%, 60%, 100% { transform: translateY(0); opacity: 0.35; }
     30% { transform: translateY(-6px); opacity: 1; }
   }
+  .chat-message .bubble { white-space: pre-wrap; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -2695,7 +2696,7 @@
   function $$(sel) { return Array.prototype.slice.call(document.querySelectorAll(sel)); }
 
   function escHtml(s) {
-    return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function toast(msg, type) {
@@ -3301,7 +3302,8 @@
     function loadHistory(agentId) {
       var key = 'wc_chat_' + agentId;
       var data = localStorage.getItem(key);
-      return data ? JSON.parse(data) : [];
+      if (!data) return [];
+      try { return JSON.parse(data); } catch (e) { console.warn('聊天记录解析失败', e); return []; }
     }
 
     function saveHistory(agentId, messages) {
@@ -3321,11 +3323,11 @@
         card.style.setProperty('--agent-color', a.color);
         card.innerHTML =
           '<div class="agent-card-top">' +
-            '<span class="agent-avatar">' + a.avatar + '</span>' +
-            '<span class="agent-name">' + a.name + '</span>' +
+            '<span class="agent-avatar">' + escHtml(a.avatar) + '</span>' +
+            '<span class="agent-name">' + escHtml(a.name) + '</span>' +
             '<span class="agent-status"></span>' +
           '</div>' +
-          '<div class="agent-specialty">' + a.specialty + '</div>';
+          '<div class="agent-specialty">' + escHtml(a.specialty) + '</div>';
         card.addEventListener('click', function() { switchAgent(a.id); });
         agentList.appendChild(card);
       });
@@ -3343,7 +3345,7 @@
       // Update chat header
       chatName.textContent = a.name + ' · ' + a.cn;
       chatRole.textContent = a.role;
-      chatAvatar.innerHTML = a.avatar;
+      chatAvatar.innerHTML = escHtml(a.avatar);
       chatAvatar.style.background = a.color + '22';
       chatStatus.textContent = '在线';
       chatStatus.style.color = 'var(--green)';
@@ -3401,6 +3403,7 @@
 
     function send() {
       var txt = input.value.trim();
+      if (txt.length > 4000) txt = txt.slice(0, 4000);
       if (!txt) return;
       if (!CURRENT_AGENT) {
         toast('请先选择要对话的智能体', 'info');
@@ -3417,7 +3420,7 @@
         return;
       }
 
-      var historyForApi = loadHistory(CURRENT_AGENT);
+      var historyForApi = loadHistory(CURRENT_AGENT).filter(function(m){ return !m.isMock; });
 
       // Check if API is configured with a valid key
       if (agent.apiKey && agent.baseUrl) {
@@ -3445,7 +3448,7 @@
           var reply = agent.replies[Math.floor(Math.random() * agent.replies.length)];
           if (mockBubble) mockBubble.innerHTML = escHtml(reply);
           var h = loadHistory(CURRENT_AGENT);
-          h.push({ text: reply, isUser: false, time: Date.now() });
+          h.push({ text: reply, isUser: false, time: Date.now(), isMock: true });
           saveHistory(CURRENT_AGENT, h);
           if (input) input.focus();
         }, 700 + Math.random() * 600);
@@ -3547,7 +3550,7 @@
     }
 
     function escHtml(s) {
-      return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     // ── LLM API Integration ──
@@ -3949,7 +3952,7 @@
       var size = 14 + Math.pow(freq/maxF, 0.6) * 24;
       var color = colors[i % colors.length];
       var opacity = 0.5 + (freq/maxF) * 0.5;
-      html += '<span class="wc-word" data-word="'+(v.word||'')+'" style="font-size:'+size.toFixed(1)+'px;color:'+color+';opacity:'+opacity.toFixed(2)+'">'+(v.word||'')+'</span>';
+      html += '<span class="wc-word" data-word="'+escHtml(v.word||'')+'" style="font-size:'+size.toFixed(1)+'px;color:'+color+';opacity:'+opacity.toFixed(2)+'">'+escHtml(v.word||'')+'</span>';
     });
     wc.innerHTML = html;
     wc.querySelectorAll('.wc-word').forEach(function(el) {
