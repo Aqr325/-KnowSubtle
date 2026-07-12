@@ -543,16 +543,16 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
     apiFetch('/api/stats/dashboard').then(function(d) {
       if (!d) return;
       State.stats = d;
-      var st = d.stats || {};
-      animateNum($('#statTime'), st.total_minutes || 0);
-      animateNum($('#statWords'), st.mastered_words || 0);
-      var acc = st.avg_accuracy;
-      if (acc != null) $('#statAccuracy').textContent = Math.round(acc*100) + '%';
-      animateNum($('#statStreak'), st.current_streak || 0);
-      $('#navTime').textContent = st.total_minutes || 0;
-      $('#navWords').textContent = st.mastered_words || 0;
-      $('#navStreak').textContent = st.current_streak || 0;
-    });
+      var st = d.summary || {};
+      animateNum($('#statTime'), st.totalMinutes || 0);
+      animateNum($('#statWords'), st.totalWords || 0);
+      var acc = st.avgAccuracy;
+      if (acc != null) $('#statAccuracy').textContent = Math.round(acc) + '%';
+      animateNum($('#statStreak'), st.streak || 0);
+      $('#navTime').textContent = st.totalMinutes || 0;
+      $('#navWords').textContent = st.totalWords || 0;
+      $('#navStreak').textContent = st.streak || 0;
+    }).catch(function() { toast('加载统计数据失败', 'error'); });
   }
 
   // ── Goals ──
@@ -560,36 +560,43 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
     apiFetch('/api/goals/today').then(function(d) {
       if (!d) return;
       State.goals = d;
-      var g = d.goals || {};
+      var prog = d.progress || {};
+      var tgt = d.target || {};
       var sets = [
-        { ring: 'goalRing1', val: 'goalVal1', key: 'pomodoros', max: 4 },
-        { ring: 'goalRing2', val: 'goalVal2', key: 'words', max: 20 },
-        { ring: 'goalRing3', val: 'goalVal3', key: 'review', max: 15 },
-        { ring: 'goalRing4', val: 'goalVal4', key: 'exercises', max: 10 },
+        { ring: 'goalRing1', val: 'goalVal1', doneKey: 'pomodoros_done', maxKey: 'pomodoros', def: 4 },
+        { ring: 'goalRing2', val: 'goalVal2', doneKey: 'words_learned', maxKey: 'words', def: 20 },
+        { ring: 'goalRing3', val: 'goalVal3', doneKey: 'minutes_studied', maxKey: 'minutes', def: 60 },
+        { ring: 'goalRing4', val: 'goalVal4', doneKey: null, maxKey: null, def: 10 },
       ];
       var C = 2 * Math.PI * 42;
       sets.forEach(function(s) {
-        var done = g[s.key] || 0;
-        var max = g[s.key + '_target'] || s.max;
+        var done = s.doneKey ? (prog[s.doneKey] || 0) : 0;
+        var max = s.maxKey ? (tgt[s.maxKey] || s.def) : s.def;
         var pct = Math.min(done / max, 1);
         var ring = $('#'+s.ring);
         var val = $('#'+s.val);
         if (ring) ring.setAttribute('stroke-dashoffset', C * (1 - pct));
-        if (val) val.textContent = done;
+        if (val) val.textContent = done + '/' + max;
       });
-      var now = new Date();
       var dateEl = $('#goalsDate');
-      if (dateEl) dateEl.textContent = now.toLocaleDateString('zh-CN');
-    });
+      if (dateEl) dateEl.textContent = d.date || new Date().toLocaleDateString('zh-CN');
+    }).catch(function() { toast('加载每日目标失败', 'error'); });
   }
 
   // ── Vocab ──
+  function calcRetention(v) {
+    var rc = v.review_count || 0;
+    if (rc === 0) return 28;
+    var lr = v.last_reviewed;
+    var days = lr ? Math.max(0, (Date.now() - new Date(lr).getTime()) / 86400000) : 99;
+    return Math.max(5, Math.min(100, Math.round(100 * Math.exp(-days / 5))));
+  }
   function loadVocab() {
     apiFetch('/api/vocab').then(function(d) {
       if (!d || !Array.isArray(d)) return;
       State.vocab = d;
       renderVocab();
-    });
+    }).catch(function() { toast('加载词库失败', 'error'); });
   }
 
   function renderVocab(filter) {
@@ -609,7 +616,7 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
     items.forEach(function(v) {
       var div = document.createElement('div');
       div.className = 'vocab-item' + (v.mastered ? ' mastered' : '');
-      var retPct = Math.round((v.retention || 0.5) * 100);
+      var retPct = calcRetention(v);
       div.innerHTML =
         '<div class="word">' + escHtml(v.word||'') + '</div>' +
         '<div class="meta">' + escHtml(v.meaning||'') + '</div>' +

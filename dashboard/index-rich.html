@@ -2675,7 +2675,7 @@
       if (!d || !Array.isArray(d)) return;
       State.vocab = d;
       renderVocab();
-    });
+    }).catch(function() { toast('加载词库失败', 'error'); });
   }
 
   function calcRetention(v) {
@@ -2730,7 +2730,7 @@
       var meaning = prompt('输入释义：') || '';
       var example = prompt('输入例句（可选，可留空）：') || '';
       btn.disabled = true;
-      apiFetch('/api/vocab', { method: 'POST', body: JSON.stringify({ word: word, meaning: meaning, example: example }) })
+      apiFetch('/api/vocab', { method: 'POST', body: JSON.stringify({ word: word, meaning: meaning, example: example, subject: (State && State.subject ? State.subject : 'main') }) })
         .then(function(d) {
           if (!d) { toast('添加失败，请重试', 'error'); return; }
           toast('已添加：' + (d.word || word), 'success');
@@ -4143,10 +4143,10 @@
       var item = State.vocab.find(function(v) { return v.id === id; });
       if (btn.classList.contains('mark-btn')) {
         var newVal = !(item && item.mastered);
-        apiFetch('/api/vocab/' + id, { method: 'PUT', body: JSON.stringify({ mastered: newVal }) }).then(function() { loadVocab(); });
+        apiFetch('/api/vocab/' + id, { method: 'PUT', body: JSON.stringify({ mastered: newVal }) }).then(function() { loadVocab(); }).catch(function() { toast('标记失败', 'error'); });
       } else if (btn.classList.contains('delete-btn')) {
         if (!confirm('确定删除「' + (item ? item.word : '') + '」？')) return;
-        apiFetch('/api/vocab/' + id, { method: 'DELETE' }).then(function() { loadVocab(); renderEbbinghaus(); });
+        apiFetch('/api/vocab/' + id, { method: 'DELETE' }).then(function() { loadVocab(); renderEbbinghaus(); }).catch(function() { toast('删除失败', 'error'); });
       } else if (btn.classList.contains('review-btn')) {
         if (item) openReviewCard([item]);
       }
