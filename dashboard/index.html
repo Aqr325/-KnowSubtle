@@ -3199,7 +3199,7 @@
       } else {
         renderReviewCard();
       }
-    });
+    }).catch(function() { toast('复习记录失败', 'error'); });
   }
 
   // ── Multi-Agent Chat ──
@@ -3482,7 +3482,7 @@
       if (!CURRENT_AGENT) return;
       var a = AGENTS.find(function(x){ return x.id === CURRENT_AGENT; });
       if (!a) return;
-      configAvatar.innerHTML = a.avatar;
+      configAvatar.textContent = (a.avatar || '').replace(/&#(\d+);/g, function(_, c){ return String.fromCodePoint(parseInt(c, 10)); });
       configAvatar.style.background = a.color + '22';
       configTitle.textContent = a.name + ' · ' + a.cn;
       configSubtitle.textContent = a.role;
