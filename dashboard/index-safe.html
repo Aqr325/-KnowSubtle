@@ -1050,7 +1050,7 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
       if (!CURRENT_AGENT) return;
       var a = AGENTS.find(function(x){ return x.id === CURRENT_AGENT; });
       if (!a) return;
-      configAvatar.innerHTML = a.avatar;
+      configAvatar.textContent = (a.avatar || '').replace(/&#(\d+);/g, function(_, c){ return String.fromCodePoint(parseInt(c, 10)); });
       configAvatar.style.background = a.color + '22';
       configTitle.textContent = a.name + ' · ' + a.cn;
       configSubtitle.textContent = a.role;
@@ -1901,7 +1901,7 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
       } else if (btn.classList.contains('delete-btn')) {
         apiFetch('/api/vocab/' + id, { method: 'DELETE' }).then(function() { loadVocab(); }).catch(function() { toast('删除失败', 'error'); });
       } else if (btn.classList.contains('review-btn')) {
-        apiFetch('/api/vocab/' + id + '/review', { method: 'POST' }).then(function() { toast('复习已记录', 'success'); loadVocab(); });
+        apiFetch('/api/vocab/' + id + '/review', { method: 'POST' }).then(function() { toast('复习已记录', 'success'); loadVocab(); }).catch(function() { toast('复习记录失败', 'error'); });
       }
     });
     $('#calPrev').addEventListener('click', function() { calDate.setMonth(calDate.getMonth()-1); renderCalendar(); });
