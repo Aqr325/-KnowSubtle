@@ -2746,30 +2746,40 @@
   }
 
   // ── Tasks ──
+  var _currentPlanetId = 1;
   function loadTasks() {
-    apiFetch('/api/goals').then(function(d) {
-      if (!d) return;
-      var tasks = d.tasks || [
-        { text: '完成番茄钟学习', done: false },
-        { text: '复习 15 个单词', done: false },
-        { text: '完成 10 道练习', done: false },
-        { text: '阅读学习建议', done: false },
-      ];
+    apiFetch('/api/tasks/' + _currentPlanetId).then(function(tasks) {
+      if (!Array.isArray(tasks)) return;
       var list = $('#taskList');
       if (!list) return;
       list.innerHTML = '';
-      tasks.forEach(function(t, idx) {
+      tasks.forEach(function(t) {
         var item = document.createElement('div');
         item.className = 'task-item' + (t.done ? ' done' : '');
-        item.innerHTML = '<div class="checkbox"></div><span class="text">' + (t.text||'') + '</span>';
-        item.addEventListener('click', function() {
-          t.done = !t.done;
-          item.classList.toggle('done', t.done);
-          toast(t.done ? '任务已完成' : '任务已取消', t.done ? 'success' : 'info');
-        });
+        item.innerHTML = '<div class="checkbox"></div><span class="text">' + escHtml(t.text || '') + '</span>';
+        item.addEventListener('click', function() { ksToggleTask(item, t); });
         list.appendChild(item);
       });
-    });
+    }).catch(function() { toast('加载任务列表失败', 'error'); });
+  }
+
+  function ksToggleTask(item, t) {
+    var prev = t.done;
+    t.done = !t.done;
+    item.classList.toggle('done', t.done);
+    apiFetch('/api/tasks/' + _currentPlanetId + '/' + t.id + '/toggle', { method: 'POST' })
+      .then(function(resp) {
+        if (resp && resp.status === 'toggled') {
+          toast(t.done ? '任务已完成' : '任务已取消', t.done ? 'success' : 'info');
+        } else {
+          t.done = prev; item.classList.toggle('done', t.done);
+          toast('保存失败：请先在「目标」中创建学习计划', 'error');
+        }
+      })
+      .catch(function() {
+        t.done = prev; item.classList.toggle('done', t.done);
+        toast('保存失败：请先在「目标」中创建学习计划', 'error');
+      });
   }
 
   // ── Achievements ──
