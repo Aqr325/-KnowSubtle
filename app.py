@@ -1236,10 +1236,6 @@ async def health_check() -> Dict[str, str]:
 
 DASHBOARD_DIR = RESOURCE_DIR
 
-@app.on_event("shutdown")
-async def shutdown_db():
-    await close_db()
-
 @app.get("/")
 async def serve_dashboard():
     dashboard_path = DASHBOARD_DIR / "index.html"
