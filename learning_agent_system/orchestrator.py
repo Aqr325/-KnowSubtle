@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -99,7 +100,7 @@ class Phase(Enum):
 class SessionContext:
     """一次完整学习会话的上下文"""
 
-    session_id: str = field(default_factory=lambda: f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    session_id: str = field(default_factory=lambda: secrets.token_hex(16))
     learning_goal: Optional[LearningGoal] = None
     learner_profile: Optional[LearnerProfile] = None
     diagnosis: Optional[KnowledgeDiagnosis] = None
@@ -147,7 +148,7 @@ class SessionContext:
             current_phase = Phase(data.get("current_phase", "profiling"))
         except Exception:
             current_phase = Phase.PROFILING
-        ctx = cls(session_id=data.get("session_id", f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"))
+        ctx = cls(session_id=data.get("session_id", secrets.token_hex(16)))
         ctx.current_phase = current_phase
         ctx.learning_goal = _safe_from_dict(LearningGoal, data.get("learning_goal"))
         ctx.learner_profile = _safe_from_dict(LearnerProfile, data.get("learner_profile"))
