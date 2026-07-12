@@ -1006,6 +1006,16 @@
     });
   }
 
+  // 最小等价 HTML 转义（与 dashboard/index.html 的 escHtml 行为一致），防止存储型 XSS
+  function escHtml(s) {
+    return (s == null ? '' : String(s))
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // ═══ Toast Notification ═══
   function showToast(message, type) {
     type = type || 'success';
@@ -1014,7 +1024,7 @@
     var toast = document.createElement('div');
     toast.className = 'toast toast-' + type;
     var icons = { success: '✅', error: '❌', warning: '⚠️' };
-    toast.innerHTML = '<span class="toast-icon">' + (icons[type] || 'ℹ️') + '</span> ' + message;
+    toast.innerHTML = '<span class="toast-icon">' + (icons[type] || 'ℹ️') + '</span> ' + escHtml(message);
     container.appendChild(toast);
     setTimeout(function() {
       toast.classList.add('hide');
