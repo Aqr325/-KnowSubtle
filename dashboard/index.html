@@ -3300,7 +3300,6 @@
         greeting: o.greeting || def.greeting,
         replies: o.replies || def.replies,
         baseUrl: o.baseUrl || def.baseUrl,
-        apiKey: o.apiKey || def.apiKey,
         model: o.model || def.model || 'gpt-4o',
         memory: o.memory || def.memory || ''
       };
@@ -3432,40 +3431,36 @@
 
       var historyForApi = loadHistory(CURRENT_AGENT).filter(function(m){ return !m.isMock; });
 
-      // Check if API is configured with a valid key
-      if (agent.apiKey && agent.baseUrl) {
-        // Real LLM API call — streamed reply rendered live into a bot bubble
-        var botBubble = appendBotBubble();
-        callLLMApi(agent, historyForApi, botBubble, function(reply) {
-          hideLoading();
-          setSending(false);
-          if (botBubble) botBubble.innerHTML = escHtml(reply);
+      // All chat now routes through the backend LLM proxy (server holds the API key)
+      var botBubble = appendBotBubble();
+      callBackendChat(agent, historyForApi, botBubble, function(reply) {
+        hideLoading();
+        setSending(false);
+        if (botBubble) botBubble.innerHTML = escHtml(reply);
+        var h = loadHistory(CURRENT_AGENT);
+        h.push({ text: reply, isUser: false, time: Date.now() });
+        saveHistory(CURRENT_AGENT, h);
+        if (input) input.focus();
+      }, function(err) {
+        hideLoading();
+        setSending(false);
+        if (err && err.code === 'LLM_NOT_CONFIGURED') {
+          var wrap = botBubble && botBubble.parentNode;
+          if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
           var h = loadHistory(CURRENT_AGENT);
-          h.push({ text: reply, isUser: false, time: Date.now() });
+          for (var i = h.length - 1; i >= 0; i--) { if (h[i].isUser) { h.splice(i, 1); break; } }
           saveHistory(CURRENT_AGENT, h);
-          if (input) input.focus();
-        }, function(err) {
-          hideLoading();
-          setSending(false);
-          if (botBubble) botBubble.innerHTML = escHtml('⚠️ API 调用失败: ' + err);
-          if (input) input.focus();
-        });
-      } else {
-        // Fallback to mock replies — show typing dots first for consistency
-        var mockBubble = appendBotBubble();
-        setTimeout(function() {
-          setSending(false);
-          var reply = agent.replies[Math.floor(Math.random() * agent.replies.length)];
-          if (mockBubble) mockBubble.innerHTML = escHtml(reply);
-          var h = loadHistory(CURRENT_AGENT);
-          h.push({ text: reply, isUser: false, time: Date.now(), isMock: true });
-          saveHistory(CURRENT_AGENT, h);
-          if (input) input.focus();
-        }, 700 + Math.random() * 600);
-      }
+          toast('请先在设置（齿轮 ⚙）中配置 LLM', 'info');
+        } else {
+          var msg = (err && err.name === 'AbortError') ? '请求超时（60s），请稍后重试或检查网络' : ('⚠️ 调用失败: ' + (err && err.message ? err.message : '未知错误'));
+          if (botBubble) botBubble.innerHTML = escHtml(msg);
+          toast(msg, 'error');
+        }
+        if (input) input.focus();
+      });
     }
 
-    // (unused streaming helper removed — callLLMApi handles real LLM calls)
+    // (chat now routes through the backend LLM proxy via callBackendChat)
 
     // ── Agent Config ──
     var configModal = $('#agentConfigModal');
@@ -3525,7 +3520,7 @@
         '<div class="config-row wide">' +
           '<label class="sync-check"><input type="checkbox" id="cfgSyncAll"> 同步到所有智能体（把上面的 API 接入配置一键应用到全部 6 个智能体）</label>' +
         '</div>' +
-        '<div class="config-hint">配置后智能体将调用真实的大模型 API 进行回复。留空则使用模拟回复。<b>模型名称必填</b>，否则接口会返回「模型名称不能为空」。</div>';
+        '<div class="config-hint">配置将保存到服务端（API Key 不会留在本地浏览器）。保存后智能体通过后端代理调用真实大模型。<b>模型名称必填</b>。</div>';
 
       var list = $('#repliesList');
       a.replies.forEach(function(r, i) {
@@ -3582,12 +3577,8 @@
       if (loadingDiv) loadingDiv.style.display = 'none';
     }
 
-    function callLLMApi(agent, history, botBubble, onSuccess, onError) {
-      var apiUrl = agent.baseUrl.replace(/\/+$/, '') + '/chat/completions';
-      if (!agent.model || !agent.model.trim()) {
-        onError('未填写模型名称（在智能体配置中填写，例如 gpt-4o 或 Agnes 对应模型名）');
-        return;
-      }
+    // Route a chat turn through the backend LLM proxy (server holds the API key)
+    function callBackendChat(agent, history, botBubble, onSuccess, onError) {
       var sys = agent.name + ' (' + agent.cn + ') — ' + agent.role + '，专长：' + agent.specialty + '。请用专业但友好的语气回复。';
       if (agent.memory && agent.memory.trim()) {
         sys += '\n【长期记忆】' + agent.memory.trim();
@@ -3597,94 +3588,58 @@
       recent.forEach(function(m) {
         messages.push({ role: m.isUser ? 'user' : 'assistant', content: m.text });
       });
-      var payload = {
-        model: agent.model,
-        messages: messages,
-        max_tokens: 600,
-        temperature: 0.7,
-        stream: true
-      };
 
       var controller = new AbortController();
-      var timeout = setTimeout(function() { controller.abort(); }, 45000);
+      var timeout = setTimeout(function() { controller.abort(); }, 60000);
 
-      fetch(apiUrl, {
+      fetch('/api/chat/agent', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + agent.apiKey
-        },
-        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: { name: agent.name }, messages: messages }),
         signal: controller.signal
       })
       .then(function(resp) {
-        if (!resp.ok) {
-          clearTimeout(timeout);
-          return resp.text().then(function(errText) {
-            throw new Error('HTTP ' + resp.status + ': ' + errText);
-          });
-        }
-        // Non-streaming fallback (server ignored stream:true)
-        if (!resp.body || !resp.body.getReader) {
-          clearTimeout(timeout);
+        clearTimeout(timeout);
+        if (resp.ok) {
           return resp.json().then(function(data) {
-            var reply = '';
-            if (data.choices && data.choices.length > 0) {
-              reply = data.choices[0].message.content;
-            } else {
-              reply = '抱歉，API 返回格式异常，无法解析。';
-            }
+            var reply = (data && typeof data.reply === 'string') ? data.reply : '';
+            if (!reply) reply = '（无内容返回）';
             return reply;
           });
         }
-        // Streaming SSE parse
-        var reader = resp.body.getReader();
-        var decoder = new TextDecoder('utf-8');
-        var buffer = '';
-        var full = '';
-        return new Promise(function(resolve, reject) {
-          function pump() {
-            reader.read().then(function(result) {
-              if (result.done) { clearTimeout(timeout); resolve(full); return; }
-              buffer += decoder.decode(result.value, { stream: true });
-              var lines = buffer.split('\n');
-              buffer = lines.pop();
-              for (var i = 0; i < lines.length; i++) {
-                var line = lines[i].trim();
-                if (!line) continue;
-                if (line.indexOf('data:') === 0) line = line.slice(5).trim();
-                if (line === '[DONE]') { clearTimeout(timeout); resolve(full); return; }
-                try {
-                  var obj = JSON.parse(line);
-                  var delta = obj.choices && obj.choices[0] && obj.choices[0].delta ? obj.choices[0].delta.content : '';
-                  if (delta) {
-                    full += delta;
-                    if (botBubble) {
-                      botBubble.innerHTML = escHtml(full);
-                      msgs.scrollTop = msgs.scrollHeight;
-                    }
-                  }
-                  if (obj.choices && obj.choices[0] && obj.choices[0].finish_reason) {
-                    clearTimeout(timeout); resolve(full); return;
-                  }
-                } catch (e) { /* skip keep-alive / partial lines */ }
-              }
-              pump();
-            }).catch(function(err) { clearTimeout(timeout); reject(err); });
+        // Error path: surface the "not configured" hint when the server rejects us
+        return resp.json().catch(function() { return {}; }).then(function(data) {
+          var detail = (data && (data.detail || data.message || '')) + '';
+          if (resp.status === 400 && detail.indexOf('请先配置 LLM') !== -1) {
+            var e = new Error('LLM_NOT_CONFIGURED');
+            e.code = 'LLM_NOT_CONFIGURED';
+            throw e;
           }
-          pump();
+          throw new Error('HTTP ' + resp.status + (detail ? ': ' + detail : ''));
         });
       })
       .then(function(reply) {
         clearTimeout(timeout);
-        var text = (typeof reply === 'string') ? reply : '';
-        if (!text) text = '（无内容返回）';
-        onSuccess(text);
+        onSuccess(reply);
       })
       .catch(function(err) {
         clearTimeout(timeout);
-        var msg = (err && err.name === 'AbortError') ? '请求超时（45s），请稍后重试或检查网络' : (err.message || '未知错误');
-        onError(msg);
+        onError(err);
+      });
+    }
+
+    // Persist LLM config to the backend (server stores the key; never cached locally)
+    function saveLLMConfig(body) {
+      return fetch('/api/config/llm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(function(resp) {
+        if (resp.ok) return resp.json().catch(function() { return {}; });
+        return resp.json().catch(function() { return {}; }).then(function(data) {
+          var detail = (data && (data.detail || data.message || '')) + '';
+          throw new Error(detail || ('HTTP ' + resp.status));
+        });
       });
     }
 
@@ -3717,31 +3672,39 @@
         if (v) replies.push(v);
       });
 
-      // Apply to AGENTS array
-      Object.assign(a, { name: name, cn: cn, role: role, specialty: specialty, greeting: greeting, replies: replies, baseUrl: baseUrl, apiKey: apiKey, model: model, memory: memory });
+      // Apply to AGENTS array (no apiKey kept in memory beyond this session)
+      Object.assign(a, { name: name, cn: cn, role: role, specialty: specialty, greeting: greeting, replies: replies, baseUrl: baseUrl, model: model, memory: memory });
 
-      // Save to localStorage overrides
+      // Save to localStorage overrides (non-secret only — apiKey is NEVER persisted locally)
       AGENT_OVERRIDES[CURRENT_AGENT] = {
         name: name, cn: cn, role: role, specialty: specialty,
         greeting: greeting, replies: replies,
-        baseUrl: baseUrl, apiKey: apiKey, model: model, memory: memory
+        baseUrl: baseUrl, model: model, memory: memory
       };
       if (syncAll) {
         AGENTS.forEach(function(x) {
-          x.baseUrl = baseUrl; x.apiKey = apiKey; x.model = model;
+          x.baseUrl = baseUrl; x.model = model;
           var ov = AGENT_OVERRIDES[x.id] || {};
-          ov.baseUrl = baseUrl; ov.apiKey = apiKey; ov.model = model;
+          ov.baseUrl = baseUrl; ov.model = model;
           AGENT_OVERRIDES[x.id] = ov;
         });
         localStorage.setItem('wc_agents_config', JSON.stringify(AGENT_OVERRIDES));
       }
       localStorage.setItem('wc_agents_config', JSON.stringify(AGENT_OVERRIDES));
 
+      // Push LLM config to backend (server-side key storage; never cached in localStorage)
+      var llmBody = { base_url: baseUrl, model: model };
+      if (apiKey) llmBody.api_key = apiKey;
+      saveLLMConfig(llmBody).then(function() {
+        toast('已保存 LLM 配置', 'success');
+      }).catch(function(err) {
+        toast('LLM 配置保存失败：' + (err && err.message ? err.message : '未知错误'), 'error');
+      });
+
       // Refresh UI
       buildAgentList();
       switchAgent(CURRENT_AGENT);
       closeConfig();
-      toast(name + ' 配置已保存', 'success');
     }
 
     function resetAgentConfig() {
@@ -3764,7 +3727,6 @@
           greeting: o.greeting || d.greeting,
           replies: o.replies || d.replies,
           baseUrl: o.baseUrl || d.baseUrl,
-          apiKey: o.apiKey || d.apiKey,
           model: o.model || d.model || 'gpt-4o',
           memory: o.memory || d.memory || ''
         };
