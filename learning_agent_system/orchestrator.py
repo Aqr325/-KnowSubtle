@@ -336,6 +336,11 @@ class TeamOrchestrator:
         if not self.context:
             raise ValueError("Must complete full pipeline before evaluation")
 
+        # 学习路径未生成时（画像已建但路径未生成的半完成态）拒绝评测，
+        # 避免非 demo 模式下 _run_evaluation 访问 None.to_dict() 导致 500。
+        if not self.context.learning_path:
+            raise ValueError("Learning path not generated yet, cannot evaluate")
+
         # 演示模式：构造合法占位评测结果（ExerciseResult 含必填字段）
         if DEMO_MODE:
             result = ExerciseResult(
@@ -607,7 +612,7 @@ class TeamOrchestrator:
             "exercise_count": len(self.context.exercise_results),
             "achievement_count": len(self.context.achievements),
             "mistake_count": len(self.context.mistake_records),
-            "streak_days": self.context.study_streak.current_streak,
+            "streak_days": self.context.study_streak.current_streak if self.context.study_streak else 0,
             "has_graph_data": self.context.graph_data is not None,
         }
         
