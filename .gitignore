@@ -29,6 +29,7 @@ Release-Package/Core/KnowSubtle/KnowSubtle.exe
 Release-Package/Core/KnowSubtle/_internal/
 Release-Package/Core/main/
 Release-Package/Install/
+/KnowSubtle-Setup.exe
 
 # Project memory (local only)
 .learning_memory/
