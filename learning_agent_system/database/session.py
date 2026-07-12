@@ -97,6 +97,10 @@ def _on_connect_fk(dbapi_conn, conn_record):
     cur = dbapi_conn.cursor()
     try:
         cur.execute("PRAGMA foreign_keys=ON")
+        # 双引擎（async 用于 FastAPI，sync 用于 orchestrator）同开一个 SQLite 文件；
+        # 设置 busy_timeout 让并发写入自动重试，避免 "database is locked"。
+        cur.execute("PRAGMA busy_timeout=5000")
+        cur.execute("PRAGMA synchronous=NORMAL")
     finally:
         cur.close()
 
