@@ -505,7 +505,7 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
   function showTooltip(x, y, html) {
     var t = $('#globalTooltip');
     if (!t) return;
-    t.innerHTML = html;
+    t.innerHTML = escHtml(html);
     t.style.left = Math.min(x+10, window.innerWidth-260) + 'px';
     t.style.top = (y+10) + 'px';
     t.classList.add('show');
@@ -685,7 +685,7 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
         card.style.opacity = a.unlocked ? '1' : '0.5';
         var pct = a.unlocked ? 100 : Math.round((a.progress || 0) / Math.max(a.target || 100, 1) * 100);
         card.innerHTML =
-          '<div style="font-size:28px;margin-bottom:6px">' + (a.unlocked ? (a.icon || '&#127942;') : '&#128274;') + '</div>' +
+          '<div style="font-size:28px;margin-bottom:6px">' + (a.unlocked ? escHtml(a.icon || '&#127942;') : '&#128274;') + '</div>' +
           '<div style="font-size:13px;font-weight:600">' + escHtml(a.title || a.name || '未知') + '</div>' +
           '<div style="font-size:11px;color:var(--text-dimmed);margin-top:4px">' + escHtml(a.description || '') + '</div>' +
           (a.unlocked ? '<div style="font-size:10px;color:var(--color-primary);margin-top:4px">已解锁</div>' :
@@ -693,7 +693,7 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
           '<div style="font-size:10px;color:var(--text-dimmed);margin-top:4px">' + pct + '%</div>';
         grid.appendChild(card);
       });
-    });
+    }).catch(function() { toast('加载成就失败', 'error'); });
   }
 
   // ── Memory Curve ──
@@ -1897,9 +1897,9 @@ input,textarea,select{background:var(--bg);color:var(--text-primary);border:1px 
       if (!btn) return;
       var id = btn.getAttribute('data-id');
       if (btn.classList.contains('mark-btn')) {
-        apiFetch('/api/vocab/' + id, { method: 'PUT', body: JSON.stringify({ mastered: !btn.textContent.includes('已掌握') }) }).then(function() { loadVocab(); });
+        apiFetch('/api/vocab/' + id, { method: 'PUT', body: JSON.stringify({ mastered: !btn.textContent.includes('已掌握') }) }).then(function() { loadVocab(); }).catch(function() { toast('标记失败', 'error'); });
       } else if (btn.classList.contains('delete-btn')) {
-        apiFetch('/api/vocab/' + id, { method: 'DELETE' }).then(function() { loadVocab(); });
+        apiFetch('/api/vocab/' + id, { method: 'DELETE' }).then(function() { loadVocab(); }).catch(function() { toast('删除失败', 'error'); });
       } else if (btn.classList.contains('review-btn')) {
         apiFetch('/api/vocab/' + id + '/review', { method: 'POST' }).then(function() { toast('复习已记录', 'success'); loadVocab(); });
       }
