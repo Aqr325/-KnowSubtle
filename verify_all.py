@@ -77,7 +77,7 @@ check("knowledge-graph/1", "GET", "/api/knowledge-graph/1", validator=lambda s, 
 check("memory-curve", "GET", "/api/memory-curve", validator=lambda s, j, r: (isinstance(j, dict) and "dataPoints" in j, "ok"), phase="A")
 check("suggestions/1", "GET", "/api/suggestions/1", validator=lambda s, j, r: (isinstance(j, list), f"len={len(j)}"), phase="A")
 check("suggestions(global)", "GET", "/api/suggestions", validator=lambda s, j, r: (isinstance(j, list) and len(j) >= 5, f"len={len(j)}"), phase="A")
-check("chat/agent(empty)", "POST", "/api/chat/agent", body={"agent": "tutor", "message": ""}, validator=lambda s, j, r: (j.get("reply"), "ok"), phase="A")
+check("chat/agent(empty, 守卫400)", "POST", "/api/chat/agent", body={"agent": "tutor", "message": ""}, expect=400, validator=lambda s, j, r: (isinstance(j, dict) and "detail" in j, "ok"), phase="A")
 check("tutor/chat(no-session)", "POST", "/api/tutor/chat", body={"message": "hi", "history": []}, validator=lambda s, j, r: (j.get("reply"), "ok"), phase="A")
 check("vocab(GET)", "GET", "/api/vocab", validator=lambda s, j, r: (isinstance(j, list), f"len={len(j)}"), phase="A")
 check("vocab/stats", "GET", "/api/vocab/stats", validator=lambda s, j, r: (isinstance(j, dict), str(j)[:80]), phase="A")
@@ -202,12 +202,12 @@ if done or sid:
     check("knowledge-graph/1(after)", "GET", "/api/knowledge-graph/1", validator=lambda s, j, r: (isinstance(j, dict), "ok"), phase="D")
     check("tutor/chat(after)", "POST", "/api/tutor/chat", body={"message": "怎么高效记单词", "history": []},
           validator=lambda s, j, r: (j.get("reply"), "ok"), phase="D")
-    check("chat/agent tutor", "POST", "/api/chat/agent", body={"agent": "tutor", "message": "解释一下词根 bio", "history": []},
-          validator=lambda s, j, r: (j.get("reply"), "ok"), phase="D")
-    check("chat/agent planner", "POST", "/api/chat/agent", body={"agent": "planner", "message": ""},
-          validator=lambda s, j, r: (j.get("reply"), "ok"), phase="D")
-    check("chat/agent evaluator", "POST", "/api/chat/agent", body={"agent": "evaluator", "message": ""},
-          validator=lambda s, j, r: (j.get("reply"), "ok"), phase="D")
+    check("chat/agent tutor (守卫400)", "POST", "/api/chat/agent", body={"agent": "tutor", "message": "解释一下词根 bio", "history": []},
+          expect=400, validator=lambda s, j, r: (isinstance(j, dict) and "detail" in j, "ok"), phase="D")
+    check("chat/agent planner (守卫400)", "POST", "/api/chat/agent", body={"agent": "planner", "message": ""},
+          expect=400, validator=lambda s, j, r: (isinstance(j, dict) and "detail" in j, "ok"), phase="D")
+    check("chat/agent evaluator (守卫400)", "POST", "/api/chat/agent", body={"agent": "evaluator", "message": ""},
+          expect=400, validator=lambda s, j, r: (isinstance(j, dict) and "detail" in j, "ok"), phase="D")
     check("exercises POST", "POST", "/api/exercises", body={"answer": "bio means life, e.g. biology"},
           validator=lambda s, j, r: (isinstance(j, dict), "ok"), phase="D")
     check("exercises LIST", "GET", "/api/exercises", validator=lambda s, j, r: (isinstance(j, list), f"len={len(j)}"), phase="D")

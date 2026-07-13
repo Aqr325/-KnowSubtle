@@ -35,6 +35,8 @@ import asyncio
 import json
 import logging
 import os
+import yaml
+import httpx
 from pathlib import Path
 
 from learning_agent_system.orchestrator import TeamOrchestrator, Phase, SessionContext
@@ -71,6 +73,12 @@ class ExerciseAnswerRequest(BaseModel):
 class TutorChatMessage(BaseModel):
     message: str = ""
     history: list = []
+
+
+class LLMConfigRequest(BaseModel):
+    base_url: str = ""
+    api_key: str = ""
+    model: str = ""
 
 # ── Logging ──
 logging.basicConfig(
@@ -228,6 +236,45 @@ def load_app_config() -> dict:
         except Exception:
             pass
     return cfg
+
+
+# ── 服务端 LLM 配置（Phase 1：Key 仅存服务端，不经浏览器）──
+LLM_CONFIG_DIR = APP_ROOT / "Config"
+LLM_CONFIG_PATH = LLM_CONFIG_DIR / "llm_config.yaml"
+
+
+def load_llm_config() -> dict:
+    """读取服务端 LLM 配置（Config/llm_config.yaml）。
+
+    结构 {base_url, api_key, model}。文件不存在或解析失败视为未配置，返回 {}。
+    """
+    if not LLM_CONFIG_PATH.exists():
+        return {}
+    try:
+        data = yaml.safe_load(LLM_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except Exception as e:
+        logger.warning("读取 llm_config.yaml 失败，视为未配置: %s", e)
+        return {}
+    return {
+        "base_url": str(data.get("base_url") or "").strip(),
+        "api_key": str(data.get("api_key") or "").strip(),
+        "model": str(data.get("model") or "").strip(),
+    }
+
+
+def save_llm_config(base_url: str, api_key: str, model: str) -> None:
+    """写入服务端 LLM 配置到 Config/llm_config.yaml（api_key 仅落服务端磁盘）。"""
+    LLM_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    data = {
+        "base_url": str(base_url).strip(),
+        "api_key": str(api_key).strip(),
+        "model": str(model).strip(),
+    }
+    LLM_CONFIG_PATH.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
 
 # 全局 orchestrator 实例（懒初始化）
 _orchestrator: Optional[TeamOrchestrator] = None
@@ -873,108 +920,133 @@ async def get_exercises() -> List[Dict[str, Any]]:
 
 
 # ── Chat Request Model ──
+class AgentChatMessageItem(BaseModel):
+    role: str = "user"
+    content: str = ""
+
+
 class AgentChatRequest(BaseModel):
-    agent: str = "tutor"  # tutor | planner | evaluator
+    # 兼容旧前端（agent 为字符串）与新前端（agent 为 {"name": ...}）
+    agent: Any = "tutor"
     message: str = ""
+    messages: List[AgentChatMessageItem] = []
     history: list = []
+
+
+@app.get("/api/config/llm")
+async def get_llm_config() -> Dict[str, Any]:
+    """读取服务端 LLM 配置（绝不回传 api_key）。
+
+    本地单用户 + 绑定 127.0.0.1，与既有安全前提一致，无需额外鉴权。
+    """
+    cfg = load_llm_config()
+    return {
+        "configured": bool(cfg.get("base_url") and cfg.get("model")),
+        "base_url": cfg.get("base_url", ""),
+        "model": cfg.get("model", ""),
+    }
+
+
+@app.post("/api/config/llm")
+async def update_llm_config(request: LLMConfigRequest) -> Dict[str, Any]:
+    """写入服务端 LLM 配置（api_key 仅落服务端磁盘，不经浏览器）。
+
+    本地单用户 + 绑定 127.0.0.1，与既有安全前提一致，无需额外鉴权。
+    """
+    base_url = (request.base_url or "").strip()
+    model = (request.model or "").strip()
+    if not base_url:
+        return JSONResponse(status_code=400, content={"detail": "base_url 为必填项。"})
+    if not model:
+        return JSONResponse(status_code=400, content={"detail": "model 为必填项。"})
+    try:
+        save_llm_config(base_url, request.api_key or "", model)
+    except Exception as e:
+        logger.error("保存 LLM 配置失败: %s", e)
+        return JSONResponse(status_code=500, content={"detail": "保存 LLM 配置失败，请稍后重试。"})
+    return {"ok": True}
+
+
+def _normalize_agent_messages(request: AgentChatRequest) -> List[Dict[str, Any]]:
+    """把两种入参统一成 OpenAI 风格的 messages 列表。
+
+    支持：
+      - {messages: [{role, content}, ...]}
+      - {message: "..."}（单轮 user 消息）
+    """
+    msgs: List[Dict[str, Any]] = []
+    for m in request.messages or []:
+        role = (m.role or "user").strip() or "user"
+        content = (m.content or "").strip()
+        if content:
+            msgs.append({"role": role, "content": content})
+    if msgs:
+        return msgs
+    text = (request.message or "").strip()
+    if text:
+        return [{"role": "user", "content": text}]
+    return []
 
 
 @app.post("/api/chat/agent")
 async def agent_chat(request: AgentChatRequest) -> Dict[str, Any]:
-    """通用多智能体聊天端点"""
-    agent_type = request.agent
-    message = request.message
-    history = request.history
+    """通用多智能体聊天端点 —— Phase 1：服务端 LLM 代理（API Key 仅存服务端）。
 
-    if not message or not message.strip():
-        return {"reply": "请输入您的问题。", "agent": agent_type, "suggestions": []}
+    客户端只传对话内容，不接触任何密钥；服务端以自身身份调用
+    {base_url}/chat/completions，Authorization: Bearer <api_key>。
+    （Phase 2 才接入真实 metagpt 流水线；此处替换原 metagpt stub 分支。）
+    """
+    cfg = load_llm_config()
+    # 守卫生效：未配置服务端 LLM 时直接拒绝，引导用户先在设置中配置
+    if not cfg.get("base_url") or not cfg.get("model"):
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "请先在设置中配置 LLM（base_url / api_key / model）"},
+        )
 
-    if not _has_meaningful_session():
-        agent_responses = {
-            "tutor": "我是您的 AI 导师 Socrates。请先设定学习目标，我将为您开启苏格拉底式引导教学！",
-            "planner": "我是学习规划师 Plato。请先运行完整学习流水线，我将为您定制个性化学习路径！",
-            "evaluator": "我是练习评测师 Eva。请先开始学习并做一些练习，我将为您提供详细反馈！",
-        }
-        return {
-            "reply": agent_responses.get(agent_type, "请先完成学习初始化。"),
-            "agent": agent_type,
-            "suggestions": [],
-        }
-
-    orch = get_orchestrator()
-    ctx = _load_current_ctx()
-    if not ctx:
-        return {"reply": "会话数据未加载，请重新初始化学习系统。", "agent": agent_type, "suggestions": []}
+    messages = _normalize_agent_messages(request)
+    if not messages:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "缺少有效的消息内容（message 或 messages）。"},
+        )
 
     try:
-        if agent_type == "tutor":
-            # 导师：基于上下文进行问答辅导
-            round_num = len(ctx.tutor_sessions) + 1
-            tutor_session = await orch._run_tutor_round(round_num, history=history)
-            ctx.tutor_sessions.append(tutor_session)
-            orch._save_checkpoint()
-            reply = tutor_session.explanation or "让我来为您解答这个问题。"
-            suggestions = tutor_session.next_steps[:3] if tutor_session.next_steps else ["继续辅导", "查看学习进度"]
-
-        elif agent_type == "planner":
-            # 规划师：基于学习路径给出建议
-            if ctx.learning_path and ctx.learning_path.modules:
-                current_module = next(
-                    (m for m in ctx.learning_path.modules if m.status.value != "completed"),
-                    ctx.learning_path.modules[-1]
-                )
-                reply = (
-                    f"根据您的学习路径规划，当前建议专注于：<strong>{current_module.title}</strong>\n\n"
-                    f"预计耗时：{current_module.estimated_hours * 60:.0f} 分钟\n"
-                    f"完成状态：{current_module.status.value}\n\n"
-                    f"建议按计划逐步推进，先完成基础知识学习，再进行练习巩固。"
-                )
-                suggestions = ["查看详细学习路径", "跳转到下一个模块", "查看已完成模块"]
-            else:
-                reply = "您的学习路径尚未生成，请先运行完整学习流水线。"
-                suggestions = ["运行完整流水线"]
-
-        elif agent_type == "evaluator":
-            # 评测师：提供练习建议
-            exercise_count = len(ctx.exercise_results)
-            correct_count = sum(1 for r in ctx.exercise_results if r.is_correct)
-            accuracy = round(correct_count / exercise_count * 100, 1) if exercise_count > 0 else 0
-
-            reply = (
-                f"📊 **练习统计汇报**\n\n"
-                f"- 总练习次数：{exercise_count}\n"
-                f"- 正确次数：{correct_count}\n"
-                f"- 准确率：{accuracy}%\n\n"
+        payload = {"model": cfg["model"], "messages": messages}
+        headers = {
+            "Authorization": f"Bearer {cfg['api_key']}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{cfg['base_url'].rstrip('/')}/chat/completions",
+                json=payload,
+                headers=headers,
             )
-            if exercise_count == 0:
-                reply += "您还没有进行过练习，建议先从基础题目开始测试！"
-                suggestions = ["开始第一套练习题"]
-            elif accuracy >= 80:
-                reply += "表现优秀！可以开始进阶知识点的练习。"
-                suggestions = ["进阶练习", "查看错题本", "复习薄弱知识点"]
-            elif accuracy >= 60:
-                reply += "表现中等，建议重点复习错题本中的知识点。"
-                suggestions = ["查看错题分析", "基础练习", "复习相关知识"]
-            else:
-                reply += "需要加强基础学习，建议重新学习薄弱知识点后再进行练习。"
-                suggestions = ["复习基础知识", "查看诊断报告", "基础练习"]
-        else:
-            reply = f"未知智能体类型：{agent_type}"
-            suggestions = []
-
-        return {
-            "reply": reply,
-            "agent": agent_type,
-            "suggestions": suggestions,
-        }
-
+        if resp.status_code >= 400:
+            logger.error("LLM 上游错误 %s: %s", resp.status_code, resp.text[:500])
+            return JSONResponse(
+                status_code=502,
+                content={"detail": f"LLM 服务返回错误（HTTP {resp.status_code}），请检查 base_url / api_key / model 配置。"},
+            )
+        try:
+            data = resp.json()
+            reply = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            logger.error("LLM 返回结构异常: %s | %s", e, resp.text[:500])
+            return JSONResponse(
+                status_code=502,
+                content={"detail": "LLM 返回结构异常，无法解析回复内容。"},
+            )
+        if not isinstance(reply, str):
+            reply = str(reply)
+        return {"reply": reply}
+    except httpx.TimeoutException:
+        logger.error("Agent chat proxy 超时")
+        return JSONResponse(status_code=504, content={"detail": "调用 LLM 服务超时，请稍后重试。"})
     except Exception as e:
-        logger.error(f"Agent chat ({agent_type}) failed: {e}")
-        return {
-            "reply": f"{agent_type} 服务暂时不可用，请稍后重试。",
-            "agent": agent_type,
-            "suggestions": ["刷新页面", "查看学习进度"],
-        }
+        logger.error("Agent chat proxy 失败: %s", e)
+        return JSONResponse(status_code=500, content={"detail": "调用 LLM 服务失败，请稍后重试。"})
 
 
 # ====================================================================
