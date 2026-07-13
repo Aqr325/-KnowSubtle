@@ -77,7 +77,7 @@ j, c, err = req("POST", "/api/tutor/chat", {"message": "", "history": []})
 check("POST /api/tutor/chat (无会话)", c == 200 and err is None, f"code={c}")
 
 j, c, err = req("POST", "/api/chat/agent", {"agent": "tutor", "message": "hi", "history": []})
-check("POST /api/chat/agent (无会话)", c == 200 and err is None, f"code={c}")
+check("POST /api/chat/agent (未配置LLM, 守卫返回400)", c == 400 and err is None, f"code={c}")
 
 j, c, err = req("POST", "/api/exercises", {"answer": "x"})
 check("POST /api/exercises (无会话, 预期400非500)", c == 400 and err is None, f"code={c}")
@@ -130,10 +130,10 @@ j, c, err = req("POST", "/api/tutor/chat", {"message": "什么是变量", "histo
 check("POST /api/tutor/chat (有会话, demo占位)", c == 200 and err is None, f"code={c}")
 
 j, c, err = req("POST", "/api/chat/agent", {"agent": "planner", "message": "下一步学什么", "history": []})
-check("POST /api/chat/agent planner (有会话)", c == 200 and err is None, f"code={c}")
+check("POST /api/chat/agent planner (未配置LLM, 守卫返回400)", c == 400 and err is None, f"code={c}")
 
 j, c, err = req("POST", "/api/chat/agent", {"agent": "evaluator", "message": "我做得怎么样", "history": []})
-check("POST /api/chat/agent evaluator (有会话)", c == 200 and err is None, f"code={c}")
+check("POST /api/chat/agent evaluator (未配置LLM, 守卫返回400)", c == 400 and err is None, f"code={c}")
 
 # ---------- 阶段 D：session/{id} ----------
 if sid:
