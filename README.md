@@ -107,19 +107,34 @@ python -m venv .venv
 # Linux/Mac: source .venv/bin/activate
 
 # 安装依赖
-pip install metagpt fastapi uvicorn pydantic
-pip install beautifulsoup4 GitPython
+pip install fastapi uvicorn pydantic httpx pyyaml aiosqlite sqlalchemy
+pip install pywebview bottle  # 桌面窗口（可选）
 ```
 
-> ⚠️ 注意：MetaGPT 的依赖树较复杂，如遇导入错误，请参考 `run_backend.py` 中的解决方案。
+> 项目使用 `local_metagpt` 作为 MetaGPT 的轻量打桩，运行打包版**无需**安装真实 MetaGPT。
 
-### 配置 LLM
+### 启动（DEMO 模式，无需 API Key）
 
 ```bash
-# 环境变量方式
-export OPENAI_API_KEY="sk-your-key-here"
-export OPENAI_API_MODEL="gpt-4o-mini"
+# 源码开发模式
+METAGPT_STUBBED=1 python app.py
+# 浏览器打开 http://127.0.0.1:8000
 ```
+
+DEMO 模式由 `local_metagpt` 桩驱动，6 智能体流水线走离线占位逻辑，端到端可演示但**不含真实 AI 推理**。**导师对话**支持真实大模型，配置方式见下文。
+
+### 配置导师对话的真实大模型
+
+桌面端设置页或后端 POST 接口：
+
+```bash
+# 通过 API 配置（Key 仅存服务端，不落浏览器）
+curl -X POST http://127.0.0.1:8000/api/config/llm \
+  -H "Content-Type: application/json" \
+  -d '{"base_url":"https://api.openai.com/v1","api_key":"sk-your-key","model":"gpt-4o-mini"}'
+```
+
+配置写入 `Config/llm_config.yaml`，**API Key 仅存于服务端磁盘**。前端 `GET /api/config/llm` 仅返回 `{configured, base_url, model}`，不含 `api_key`。未配置时 `POST /api/chat/agent` 返回 400 守卫。
 
 ### 运行
 
@@ -134,7 +149,7 @@ python -m learning_agent_system.main --resume <session_id> --status
 
 **方式二：Web 仪表板**
 ```bash
-python run_backend.py
+python app.py
 # 浏览器访问 http://localhost:8000
 ```
 
@@ -153,6 +168,8 @@ python run_backend.py
 | `/api/memory-curve` | GET | 获取艾宾浩斯记忆曲线 |
 | `/api/suggestions/{planet_id}` | GET | 获取 AI 学习建议 |
 | `/api/tutor/chat` | POST | AI 导师对话 |
+| `/api/chat/agent` | POST | 多智能体聊天（服务端代理，未配置 LLM 时返回 400） |
+| `/api/config/llm` | GET/POST | LLM 配置管理（GET 不返回 api_key） |
 | `/api/report-card` | GET | 获取学习报告卡 |
 | `/api/sessions` | GET/POST | 学习会话管理 |
 | `/api/session/status` | GET | 获取当前会话状态 |
@@ -176,7 +193,7 @@ python run_backend.py
 ### 启动方式
 
 ```bash
-python run_backend.py
+python app.py
 # 浏览器访问 http://localhost:8000
 ```
 
@@ -215,13 +232,13 @@ asyncio.run(main())
 
 ## 配置
 
-系统配置在 `configs/system_config.py` 中管理，支持：
-- **LLM 后端**: OpenAI / 兼容 API
+系统配置在 `learning_agent_system/configs/system_config.py` 中管理，支持：
+- **LLM 后端**: 通过 `POST /api/config/llm` 配置（持久化到 `Config/llm_config.yaml`），Key 仅存服务端
 - **知识库路径**: 自定义知识库文件路径
 - **Agent 参数**: 各 Agent 的温度、最大 token 等
 - **存储路径**: 记忆和检查点的存储目录
 
-MetaGPT 配置通过环境变量或 `config/key.yaml` 设置。
+数据目录默认位于 `%APPDATA%/KnowSubtle/Data`，可用 `LAS_DATA_DIR`/`LAS_DB_PATH` 环境变量重定向。
 
 ## 开发里程碑
 
@@ -234,6 +251,16 @@ MetaGPT 配置通过环境变量或 `config/key.yaml` 设置。
 | 前后端 API 完整对接 | ✅ |
 | 端到端集成测试 | ✅ |
 | 项目文档 | ✅ |
+| 前后端安全审计与修复 | ✅ |
+
+## 安全
+
+| 项 | 描述 | 状态 |
+|----|------|------|
+| CORS | 移除 `"null"` origin，限制可信来源 | ✅ S1 |
+| Session ID | 使用 `secrets.token_hex(16)` 随机化，不可预测 | ✅ S2 |
+| 存储 XSS | profile.html bio→toast 使用 `escHtml()` 转义 | ✅ S3 |
+| API Key 隔离 | LLM 配置 Key 仅存服务端 `Config/llm_config.yaml`，`GET /api/config/llm` 绝不回传 | ✅ Phase 1 |
 
 ## 许可证
 
