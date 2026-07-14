@@ -137,7 +137,7 @@ pyinstaller launcher.py --name main --onedir --windowed \
 - 修正安装器/文档中 `Core/KnowSubtle/KnowSubtle.exe` → `Core/KnowSubtle/KnowSubtle.exe` 的所有引用（install.psi、install.nsi 快捷方式、用户手册、Runtime/README）。
 - `build/make_hash.py` 重算 `Security/FileHash.txt`（**257 文件**，含正确二进制路径）；清理临时验证目录。
 
-## 八、本轮追加修复（2026-07-08 下午）
+## 九、本轮追加修复（2026-07-08 下午）
 
 针对「原生桌面窗口」交付后的回归排查与健壮性收尾：
 
@@ -147,7 +147,7 @@ pyinstaller launcher.py --name main --onedir --windowed \
 4. **澄清「stats/dashboard 连接重置」系测试假象**：此前观察到的连接重置源于（a）旧实例占用 8000 端口导致新二进制被单实例守护直接退出、探针打到了状态不稳的旧实例；（b）测试误用 POSIX 风格路径 `/tmp/...` 在 Windows 上解析为非法 UNC 路径，触发 `TeamOrchestrator.__init__` 的 `mkdir` 报错（500）。两项均为测试环境问题，**非产品缺陷**；当前交付二进制经合法 Windows 路径复测已确认健康。
 5. `build/make_hash.py` 重算 `Security/FileHash.txt` 为 **273 个文件**（含新二进制修正路径）。
 
-## 九、词库管理 bug 修复（2026-07-08 下午，用户反馈）
+## 十、词库管理 bug 修复（2026-07-08 下午，用户反馈）
 
 用户报告：「词库管理中添加单词没反应，切换学科没什么变化，各个学科呈现都相同」。
 
