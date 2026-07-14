@@ -1,4 +1,4 @@
-# Release-Package 交付报告 · KnowSubtle Learning Universe v2.1.0
+# Release-Package 交付报告 · KnowSubtle Learning Universe v3.0.0
 
 > **状态：已完成可独立执行的 Windows 桌面程序（全交付 + 全面审计修复）。**
 > `Core/KnowSubtle/KnowSubtle.exe`（onedir 单文件夹）已用 PyInstaller 6.21.0 真实编译并**脱离源码独立验证**（全部路由 HTTP 200、离线 demo 流水线端到端跑通并落盘）；`vc_redist.exe` 已内置、`用户手册.pdf` 已生成、并提供免工具一键安装/卸载。
@@ -91,14 +91,30 @@ pyinstaller launcher.py --name main --onedir --windowed \
 ### 关闭
 关闭桌面窗口即退出程序（`KnowSubtle.exe` 同步结束）；若回退到浏览器模式，请关闭浏览器标签并在任务管理器结束 `KnowSubtle.exe`（进程名仍为 `KnowSubtle.exe`；端口冲突已处理 +1 回退）。
 
-## 六、已知限制
+## 六、配置指南（真实大模型 / 数据目录）
 
-1. **LLM 为 stub 打桩 + DEMO_MODE**：离线桌面端默认走 `_build_demo_context` 构造占位学习对象，使「个性化学习 / 评测 / 导师」等流程**可演示运行但不含真实 AI 推理**；配置真实 API（在 `Config/config.json` 或环境变量设 `OPENAI_API_KEY`/`OPENAI_API_BASE` 并禁用 stub）后启用真实大模型。
+### 6.1 启用导师对话的真实大模型
+桌面端「个性化学习」的**导师对话**支持接入真实 LLM，配置方式二选一：
+- **桌面端设置页**：在设置中填入「API Base URL / API Key / 模型名」，保存即生效；
+- **后端接口**：`POST /api/config/llm` 提交 `{"base_url":"...","api_key":"...","model":"..."}`。
+
+落盘与隔离原则：
+- 配置写入 `Config/llm_config.yaml`，**API Key 仅存于服务端磁盘，后端代理转发时持有，绝不回传浏览器**；前端 `GET /api/config/llm` 仅返回 `{configured, base_url, model}`，不含 `api_key`；
+- 未配置时 `POST /api/chat/agent` 返回 `400` 守卫；配置后由服务端带 Key 转发真实 `/chat/completions`，上游异常以 `502/504` 兜底。
+
+### 6.2 数据目录与迁移
+- 运行时数据（数据库 `knowsubtle.db`、JSON 存储、长期记忆）默认位于 `%APPDATA%/KnowSubtle/Data`；
+- 可用环境变量重定向：`LAS_DATA_DIR`（JSON/存储目录）、`LAS_DB_PATH`（指向 `*.db` 文件）；
+- v2→v3 升级：首次启动自动 `migrate_json_to_db()` 导入旧 JSON，无需手动迁移。
+
+## 七、已知限制
+
+1. **大模型能力分两层**：① **导师对话（B 路线）已支持真实大模型**——`POST /api/chat/agent` 由服务端代理调用真实 OpenAI 兼容接口；配置方式是在桌面端「设置」填入或后端调用 `POST /api/config/llm`（`base_url` / `api_key` / `model`），配置持久化到 `Config/llm_config.yaml`，**Key 仅存服务端、绝不回传浏览器**，未配置时返回 400 守卫。② **6 智能体「个性化学习 / 评测」流水线目前仍为离线 demo 占位**——由 `local_metagpt` stub + `METAGPT_STUBBED=1` 驱动 `_build_demo_context` 构造合法占位对象，流程端到端可演示但**不含真实 AI 推理**；真实 MetaGPT 流水线属 Phase 2，待后续版本启用（届时移除 `app.py` 的 stub 强制注入并保留 demo 兜底）。
 2. **vc_redist.exe 已内置**（位于 `Install/`）：Win10/11 通常因 `Core/KnowSubtle/_internal` 已含 `VCRUNTIME140.dll` 而无需，纯净/老系统由安装脚本静默安装兜底。
 3. **NSIS 安装包未在本机编译**：因本机环境对 sourceforge / GitHub release CDN / Chocolatey 包存储网络不通、winget 的 NSIS 包在用户作用域无可装项，未能自动生成 `KnowSubtle-Setup.exe`；已提供等价的免工具 `install.bat`/`install.ps1` 安装器，`install.nsi` 仍保留供有 NSIS 环境编译。
 4. **Core/lib/ 为空**：PyInstaller 6.x 将依赖收至 `Core/KnowSubtle/_internal/`（标准结构），与 `lib/` 语义等价。
 
-## 七、本轮全面审计与修复（2026-07-07 晚 ~ 2026-07-08）
+## 八、本轮全面审计与修复（2026-07-07 晚 ~ 2026-07-08）
 
 应「全面检查前后端和数据库，完善修复，风暴为可独立运行的 Windows 桌面程序」要求，对前端/后端/数据持久化层做了完整审计与修复（后端只读审计报告 `backend-audit` 同步核对），并经 `build/smoke_demo.py` 单测 + 脱离源码独立验证全绿：
 
