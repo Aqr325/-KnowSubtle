@@ -25,7 +25,7 @@ Personalized Resource Generation & Learning Multi-Agent System
 重构后：所有 Mock API 端点替换为 TeamOrchestrator 真实调用
 """
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -79,6 +79,20 @@ class LLMConfigRequest(BaseModel):
     base_url: str = ""
     api_key: str = ""
     model: str = ""
+
+
+# ── Auth Pydantic Request Models ──
+
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=2, max_length=64)
+    email: str = Field(..., max_length=128)
+    password: str = Field(..., min_length=6, max_length=128)
+    display_name: str = Field("", max_length=64)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=128)
 
 # ── Logging ──
 logging.basicConfig(
@@ -1050,6 +1064,147 @@ async def agent_chat(request: AgentChatRequest) -> Dict[str, Any]:
 
 
 # ====================================================================
+# Auth Endpoints
+# ====================================================================
+
+async def _get_current_user(request: Request) -> Optional[Dict[str, Any]]:
+    """从 Authorization header 解析当前用户（可选鉴权——匿名访问可继续）。"""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        return None
+    token_str = auth[len("Bearer "):].strip()
+    if not token_str:
+        return None
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+        user = await repo.get_user_by_token(token_str)
+        if not user:
+            return None
+        return {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar": user.avatar,
+            "created_at": user.created_at.isoformat() if user.created_at else "",
+        }
+
+
+async def _require_user(request: Request) -> Dict[str, Any]:
+    """强制鉴权——未登录则 401。"""
+    user = await _get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+
+@app.post("/api/auth/register")
+async def register(body: RegisterRequest) -> Dict[str, Any]:
+    """注册新用户"""
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+
+        # 检查用户名是否已存在
+        existing = await repo.get_by_username(body.username)
+        if existing:
+            raise HTTPException(status_code=409, detail="用户名已被注册")
+
+        # 检查邮箱是否已存在
+        existing_email = await repo.get_by_email(body.email)
+        if existing_email:
+            raise HTTPException(status_code=409, detail="邮箱已被注册")
+
+        try:
+            user = await repo.register(
+                username=body.username,
+                email=body.email,
+                password=body.password,
+                display_name=body.display_name or body.username,
+            )
+        except Exception as e:
+            logger.error(f"注册失败: {e}")
+            raise HTTPException(status_code=500, detail="注册失败，请稍后重试")
+
+        # 注册成功自动生成 token
+        try:
+            token = await repo.create_token(user.id)
+        except Exception as e:
+            logger.error(f"注册后生成 token 失败: {e}")
+            raise HTTPException(status_code=500, detail="注册成功但生成令牌失败，请尝试登录")
+
+    return {
+        "status": "ok",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "display_name": user.display_name or user.username,
+            "avatar": user.avatar,
+        },
+        "token": token.token,
+    }
+
+
+@app.post("/api/auth/login")
+async def login(body: LoginRequest) -> Dict[str, Any]:
+    """用户登录"""
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+        user = await repo.authenticate(body.username, body.password)
+        if not user:
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+        # 生成 token
+        try:
+            token = await repo.create_token(user.id)
+        except Exception as e:
+            logger.error(f"登录生成 token 失败: {e}")
+            raise HTTPException(status_code=500, detail="登录失败，请稍后重试")
+
+    return {
+        "status": "ok",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "display_name": user.display_name or user.username,
+            "avatar": user.avatar,
+        },
+        "token": token.token,
+    }
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request) -> Dict[str, Any]:
+    """登出（吊销当前 token）"""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token_str = auth[len("Bearer "):].strip()
+        if token_str:
+            async with get_async_session() as session:
+                repo = UserRepository(session)
+                await repo.revoke_token(token_str)
+    return {"status": "ok", "message": "已登出"}
+
+
+@app.post("/api/auth/logout-all")
+async def logout_all(user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """登出所有设备（吊销该用户所有 token）"""
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+        count = await repo.revoke_all_user_tokens(user["id"])
+    return {"status": "ok", "message": f"已登出全部设备（{count} 个会话）"}
+
+
+@app.get("/api/auth/me")
+async def auth_me(user: Optional[Dict[str, Any]] = Depends(_get_current_user)) -> Dict[str, Any]:
+    """获取当前登录用户信息"""
+    if not user:
+        return {"authenticated": False}
+    return {"authenticated": True, "user": user}
+
+
+# ====================================================================
 # Stats / Dashboard Analytics Endpoint
 # ====================================================================
 
@@ -1058,7 +1213,7 @@ import math
 from datetime import datetime, timedelta
 
 # 数据库查询替代 JSON 文件
-from learning_agent_system.database.repo import StatsRepository, VocabRepository, DailyGoalRepository
+from learning_agent_system.database.repo import StatsRepository, VocabRepository, DailyGoalRepository, UserRepository
 
 
 @app.get("/api/stats/dashboard")

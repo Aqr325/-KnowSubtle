@@ -24,7 +24,7 @@ from .models import (
     ResourcePlan, LearningPath, LearningModule, TutorSession,
     ExerciseResult, Achievement, MistakeRecord, KnowledgeDecay,
     StudyStreak, MultiGoalProgress, Vocab, DailyStats, DailyWords,
-    DailyAccuracy, DailyGoal,
+    DailyAccuracy, DailyGoal, User, AuthToken,
 )
 
 logger = logging.getLogger("db.repo")
@@ -731,3 +731,132 @@ async def migrate_json_to_db(storage_dir: Optional[str] = None):
         logger.info("JSON 数据迁移完成")
     else:
         logger.info("无需迁移（数据库已有数据或无 JSON 文件）")
+
+
+# ════════════════════════════════════════════
+# User Authentication Repository
+# ════════════════════════════════════════════
+
+import hashlib as _hashlib
+import secrets as _secrets
+from datetime import timedelta as _timedelta
+
+from .models import User, AuthToken
+
+
+class UserRepository:
+    """用户认证 Repository"""
+
+    def __init__(self, session: AsyncSession):
+        self.s = session
+
+    # ── 密码工具 ──
+
+    @staticmethod
+    def _hash_password(password: str) -> tuple[str, str]:
+        """返回 (hash, salt)，使用 SHA-256 + 16 字节随机盐。"""
+        salt = _secrets.token_hex(16)
+        h = _hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+        return h, salt
+
+    @staticmethod
+    def _verify_password(password: str, stored_hash: str, salt: str) -> bool:
+        h = _hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+        return h == stored_hash
+
+    # ── 注册 ──
+
+    async def register(self, username: str, email: str, password: str, display_name: str = "") -> User:
+        """注册新用户，返回 User 对象。用户名/邮箱重复时返回 None（由调用方处理错误消息）。"""
+        pw_hash, pw_salt = self._hash_password(password)
+        user = User(
+            username=username,
+            email=email,
+            password_hash=pw_hash,
+            password_salt=pw_salt,
+            display_name=display_name or username,
+            avatar="👤",
+            created_at=datetime.now(),
+            is_active=True,
+        )
+        self.s.add(user)
+        await self.s.commit()
+        await self.s.refresh(user)
+        return user
+
+    async def get_by_username(self, username: str) -> Optional[User]:
+        result = await self.s.execute(select(User).where(User.username == username))
+        return result.scalar_one_or_none()
+
+    async def get_by_email(self, email: str) -> Optional[User]:
+        result = await self.s.execute(select(User).where(User.email == email))
+        return result.scalar_one_or_none()
+
+    # ── 登录 / Token ──
+
+    async def authenticate(self, username: str, password: str) -> Optional[User]:
+        """验证用户名+密码，成功返回 User，失败返回 None。"""
+        user = await self.get_by_username(username)
+        if not user:
+            return None
+        if not self._verify_password(password, user.password_hash, user.password_salt):
+            return None
+        return user
+
+    async def create_token(self, user_id: int, ttl_hours: int = 24 * 30) -> AuthToken:
+        """创建长效 token（默认 30 天），同时吊销旧 token（单设备登录策略）。"""
+        token_str = _secrets.token_hex(32)
+        expires = datetime.now() + _timedelta(hours=ttl_hours)
+        token = AuthToken(
+            user_id=user_id,
+            token=token_str,
+            created_at=datetime.now(),
+            expires_at=expires,
+            is_revoked=False,
+        )
+        self.s.add(token)
+        await self.s.commit()
+        await self.s.refresh(token)
+        return token
+
+    async def get_user_by_token(self, token_str: str) -> Optional[User]:
+        """按 token 查用户，跳过过期/已吊销的。"""
+        result = await self.s.execute(
+            select(AuthToken).where(
+                AuthToken.token == token_str,
+                AuthToken.is_revoked == False,  # noqa: E712
+                AuthToken.expires_at > datetime.now(),
+            )
+        )
+        token = result.scalar_one_or_none()
+        if not token:
+            return None
+        # 顺便查用户
+        user_result = await self.s.execute(select(User).where(User.id == token.user_id))
+        return user_result.scalar_one_or_none()
+
+    async def revoke_token(self, token_str: str) -> bool:
+        """吊销指定 token。"""
+        result = await self.s.execute(select(AuthToken).where(AuthToken.token == token_str))
+        token = result.scalar_one_or_none()
+        if not token:
+            return False
+        token.is_revoked = True
+        await self.s.commit()
+        return True
+
+    async def revoke_all_user_tokens(self, user_id: int) -> int:
+        """吊销用户所有 token，返回影响行数。"""
+        result = await self.s.execute(
+            select(AuthToken).where(
+                AuthToken.user_id == user_id,
+                AuthToken.is_revoked == False,  # noqa: E712
+            )
+        )
+        tokens = result.scalars().all()
+        count = 0
+        for t in tokens:
+            t.is_revoked = True
+            count += 1
+        await self.s.commit()
+        return count

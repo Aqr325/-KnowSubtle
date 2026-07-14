@@ -23,13 +23,15 @@ BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 results = []
 
 
-def req(method, path, body=None):
+def req(method, path, body=None, headers=None):
     url = BASE + path
     data = None
-    headers = {"Content-Type": "application/json"}
+    req_headers = {"Content-Type": "application/json"}
+    if headers:
+        req_headers.update(headers)
     if body is not None:
         data = json.dumps(body).encode("utf-8")
-    r = urllib.request.Request(url, data=data, headers=headers, method=method)
+    r = urllib.request.Request(url, data=data, headers=req_headers, method=method)
     try:
         with urllib.request.urlopen(r, timeout=30) as resp:
             code = resp.getcode()
@@ -134,6 +136,48 @@ check("POST /api/chat/agent planner (未配置LLM, 守卫返回400)", c == 400 a
 
 j, c, err = req("POST", "/api/chat/agent", {"agent": "evaluator", "message": "我做得怎么样", "history": []})
 check("POST /api/chat/agent evaluator (未配置LLM, 守卫返回400)", c == 400 and err is None, f"code={c}")
+
+# ═══════════════════════════════════════════
+# 阶段 E：Auth 端点
+# ═══════════════════════════════════════════
+import random
+_test_suffix = str(random.randint(10000, 99999))
+_test_username = f"smoketest_{_test_suffix}"
+_test_password = "testpass123"
+
+j, c, err = req("GET", "/api/auth/me")
+check("GET /api/auth/me (未登录)", c == 200 and (j or {}).get("authenticated") == False, f"code={c}")
+
+# 注册
+payload = {"username": _test_username, "email": f"{_test_username}@test.com", "password": _test_password}
+j, c, err = req("POST", "/api/auth/register", payload)
+check("POST /api/auth/register (新用户)", c == 200 and (j or {}).get("status") == "ok", f"code={c} _token={bool((j or {}).get('token'))}")
+
+# 重复注册
+j, c, err = req("POST", "/api/auth/register", payload)
+check("POST /api/auth/register (重复用户名)", c == 409, f"code={c}")
+
+# 登录
+j, c, err = req("POST", "/api/auth/login", {"username": _test_username, "password": _test_password})
+_auth_token = (j or {}).get("token", "")
+check("POST /api/auth/login (正确密码)", c == 200 and bool(_auth_token), f"code={c}")
+
+# 错误密码
+j, c, err = req("POST", "/api/auth/login", {"username": _test_username, "password": "wrongpass"})
+check("POST /api/auth/login (错误密码)", c == 401, f"code={c}")
+
+# auth/me with token
+if _auth_token:
+    j, c, err = req("GET", "/api/auth/me", headers={"Authorization": f"Bearer {_auth_token}"})
+    check("GET /api/auth/me (已登录)", c == 200 and (j or {}).get("authenticated") == True, f"code={c}")
+
+    # 登出
+    j, c, err = req("POST", "/api/auth/logout", headers={"Authorization": f"Bearer {_auth_token}"})
+    check("POST /api/auth/logout", c == 200, f"code={c}")
+
+    # token 吊销后不可用
+    j, c, err = req("GET", "/api/auth/me", headers={"Authorization": f"Bearer {_auth_token}"})
+    check("GET /api/auth/me (token已吊销)", c == 200 and (j or {}).get("authenticated") == False, f"code={c}")
 
 # ---------- 阶段 D：session/{id} ----------
 if sid:
