@@ -3136,7 +3136,7 @@
         card.style.setProperty('--agent-color', a.color);
         card.innerHTML =
           '<div class="agent-card-top">' +
-            '<span class="agent-avatar">' + escHtml(a.avatar) + '</span>' +
+            '<span class="agent-avatar">' + entityToChar(a.avatar) + '</span>' +
             '<span class="agent-name">' + escHtml(a.name) + '</span>' +
             '<span class="agent-status"></span>' +
           '</div>' +
@@ -3158,7 +3158,7 @@
       // Update chat header
       chatName.textContent = a.name + ' · ' + a.cn;
       chatRole.textContent = a.role;
-      chatAvatar.innerHTML = escHtml(a.avatar);
+      chatAvatar.innerHTML = entityToChar(a.avatar);
       chatAvatar.style.background = a.color + '22';
       chatStatus.textContent = '在线';
       chatStatus.style.color = 'var(--green)';
@@ -3364,6 +3364,10 @@
 
     function escHtml(s) {
       return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function entityToChar(s) {
+      return (s || '').replace(/&#(\d+);/g, function(_, c) { return String.fromCodePoint(parseInt(c, 10)); });
     }
 
     // ── LLM API Integration ──
