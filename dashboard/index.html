@@ -2223,7 +2223,156 @@
     30% { transform: translateY(-6px); opacity: 1; }
   }
   .chat-message .bubble { white-space: pre-wrap; word-break: break-word; }
-</style>
+/* ── Auth Modal ── */
+.auth-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(0,0,0,0.65);
+  backdrop-filter: blur(8px);
+  display: none; align-items: center; justify-content: center;
+  animation: fadeIn 0.25s ease;
+}
+.auth-overlay.show { display: flex; }
+.auth-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  padding: 32px;
+  width: 380px;
+  max-width: 90vw;
+  box-shadow: var(--shadow-dropdown);
+  animation: fadeInUp 0.3s ease;
+}
+.auth-modal h2 {
+  text-align: center;
+  margin-bottom: 24px;
+  font-size: 20px;
+  background: var(--gradient-title);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.auth-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 24px;
+  background: rgba(255,255,255,0.04);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.auth-tab {
+  flex: 1;
+  padding: 10px;
+  text-align: center;
+  font-size: 13px; font-weight: 600;
+  color: var(--text-dimmed);
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  background: transparent;
+}
+.auth-tab.active {
+  color: #fff;
+  background: var(--color-primary);
+}
+.auth-form { display: none; }
+.auth-form.active { display: block; }
+.auth-form .field {
+  margin-bottom: 16px;
+}
+.auth-form .field label {
+  display: block;
+  font-size: 12px; font-weight: 600;
+  color: var(--text-dimmed);
+  margin-bottom: 6px;
+}
+.auth-form .field input {
+  width: 100%;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.auth-form .field input:focus {
+  border-color: var(--color-primary);
+}
+.auth-form .field input::placeholder {
+  color: var(--text-dimmed);
+  opacity: 0.6;
+}
+.auth-btn {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--color-primary), #7c3aed);
+  color: #fff;
+  font-size: 14px; font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.auth-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-primary);
+}
+.auth-error {
+  color: var(--red);
+  font-size: 12px;
+  text-align: center;
+  margin-top: 12px;
+  min-height: 18px;
+}
+.auth-user-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 14px;
+  background: rgba(168,85,247,0.15);
+  border: 1px solid rgba(168,85,247,0.3);
+  border-radius: var(--radius-full);
+  color: #fff;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.auth-user-btn:hover {
+  background: rgba(168,85,247,0.25);
+  transform: scale(1.02);
+}
+.auth-user-btn .auth-avatar {
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+}
+.auth-dropdown {
+  position: absolute; top: 100%; right: 0; margin-top: 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-dropdown);
+  min-width: 160px;
+  display: none;
+  z-index: 999;
+}
+.auth-dropdown.show { display: block; }
+.auth-dropdown a {
+  display: block;
+  padding: 10px 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.auth-dropdown a:hover {
+  background: rgba(255,255,255,0.05);
+  color: #fff;
+}
+.auth-dropdown a.danger { color: var(--red); }
+.auth-dropdown a.danger:hover { background: rgba(239,68,68,0.1); }
 </head>
 <body>
 
@@ -2274,7 +2423,7 @@
     <button class="ctrl-btn" id="perfToggle" title="性能模式：关闭磨砂特效以降低显存占用">&#9889;</button>
     <button class="ctrl-btn" title="通知" id="notifyBtn"><span class="badge"></span>&#128276;</button>
     <span class="ctrl-sep"></span>
-    <span class="user-avatar" title="个人主页" onclick="window.location.href='profile.html'">U</span>
+    <span class="user-avatar" id="userAuthBtn" title="账号" style="cursor:pointer">👤</span>
     <span class="ctrl-sep"></span>
     <button class="ctrl-btn" id="sceneChatBtn" title="多智能体聊天">&#129302;</button>
   </div>
@@ -2727,6 +2876,9 @@
     opts = opts || {};
     var headers = opts.headers || {};
     if (opts.body) headers['Content-Type'] = 'application/json';
+    // 注入认证 token
+    var token = localStorage.getItem('wc_auth_token');
+    if (token) headers['Authorization'] = 'Bearer ' + token;
     return fetch(url, Object.assign({ method: opts.method || 'GET', headers: headers },
       opts.body ? { body: opts.body } : {})).then(function(r){ return r.ok ? r.json() : null; });
   }
@@ -4465,6 +4617,246 @@
   }
 
   })();
+
+// ═══════════════════════════════════════════
+// Auth System
+// ═══════════════════════════════════════════
+
+// ── Auth state ──
+var AuthState = {
+  token: localStorage.getItem('wc_auth_token') || null,
+  user: null,
+};
+
+// ── Check auth on load ──
+function initAuth() {
+  var btn = document.getElementById('userAuthBtn');
+  if (!btn) return;
+  if (AuthState.token) {
+    // Verify token is still valid
+    fetch('/api/auth/me', {
+      headers: { 'Authorization': 'Bearer ' + AuthState.token }
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (data.authenticated && data.user) {
+        AuthState.user = data.user;
+        renderAuthUI();
+      } else {
+        // Token expired/invalid
+        localStorage.removeItem('wc_auth_token');
+        AuthState.token = null;
+        renderAuthUI();
+      }
+    }).catch(function() {
+      // Network error, keep UI as guest
+      renderAuthUI();
+    });
+  } else {
+    renderAuthUI();
+  }
+}
+
+// ── Render auth UI (login button or user info) ──
+function renderAuthUI() {
+  var btn = document.getElementById('userAuthBtn');
+  if (!btn) return;
+  if (AuthState.user) {
+    var name = AuthState.user.display_name || AuthState.user.username;
+    var avatar = AuthState.user.avatar || '👤';
+    btn.innerHTML = '';
+    btn.style.cssText = '';
+    var wrap = document.createElement('div');
+    wrap.className = 'auth-user-btn';
+    wrap.style.position = 'relative';
+    wrap.innerHTML = '<span class="auth-avatar">' + (avatar.length <= 2 ? avatar : '👤') + '</span><span>' + escHtml(name) + '</span>';
+    // Dropdown
+    var dd = document.createElement('div');
+    dd.className = 'auth-dropdown';
+    dd.id = 'authDropdown';
+    dd.innerHTML =
+      '<a onclick="closeAuthDropdown();showAuthProfile()">👤 个人资料</a>' +
+      '<a onclick="closeAuthDropdown();handleLogout()" class="danger">🚪 退出登录</a>';
+    wrap.appendChild(dd);
+    btn.appendChild(wrap);
+    wrap.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var d = document.getElementById('authDropdown');
+      if (d) d.classList.toggle('show');
+    });
+    // Close dropdown on outside click
+    document.addEventListener('click', function closeDrop(e) {
+      var d = document.getElementById('authDropdown');
+      if (d && !d.contains(e.target) && !wrap.contains(e.target)) {
+        d.classList.remove('show');
+      }
+    }, { once: false });
+  } else {
+    btn.innerHTML = '👤';
+    btn.style.cssText = '';
+    btn.onclick = function() { showAuthModal(); };
+  }
+}
+
+function closeAuthDropdown() {
+  var d = document.getElementById('authDropdown');
+  if (d) d.classList.remove('show');
+}
+
+// ── Show/hide modal ──
+function showAuthModal() {
+  var m = document.getElementById('authModal');
+  if (m) m.classList.add('show');
+  document.getElementById('authError').textContent = '';
+  document.getElementById('authErrorReg').textContent = '';
+}
+
+function hideAuthModal() {
+  var m = document.getElementById('authModal');
+  if (m) m.classList.remove('show');
+}
+
+// ── Switch tab ──
+function switchAuthTab(tab) {
+  document.querySelectorAll('.auth-tab').forEach(function(t) {
+    t.classList.toggle('active', t.getAttribute('data-tab') === tab);
+  });
+  document.getElementById('authFormLogin').classList.toggle('active', tab === 'login');
+  document.getElementById('authFormRegister').classList.toggle('active', tab === 'register');
+  document.getElementById('authError').textContent = '';
+  document.getElementById('authErrorReg').textContent = '';
+}
+
+// ── Login ──
+function handleLogin() {
+  var username = document.getElementById('loginUsername').value.trim();
+  var password = document.getElementById('loginPassword').value;
+  var errEl = document.getElementById('authError');
+  if (!username) { errEl.textContent = '请输入用户名'; return; }
+  if (!password) { errEl.textContent = '请输入密码'; return; }
+  errEl.textContent = '';
+  fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: username, password: password })
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) throw new Error(data.detail || '登录失败');
+      return data;
+    });
+  }).then(function(data) {
+    AuthState.token = data.token;
+    AuthState.user = data.user;
+    localStorage.setItem('wc_auth_token', data.token);
+    hideAuthModal();
+    renderAuthUI();
+    toast('欢迎回来，' + (data.user.display_name || data.user.username) + '！', 'success');
+  }).catch(function(err) {
+    errEl.textContent = err.message || '登录失败，请稍后重试';
+  });
+}
+
+// ── Register ──
+function handleRegister() {
+  var username = document.getElementById('regUsername').value.trim();
+  var email = document.getElementById('regEmail').value.trim();
+  var password = document.getElementById('regPassword').value;
+  var displayName = document.getElementById('regDisplayName').value.trim();
+  var errEl = document.getElementById('authErrorReg');
+  if (!username) { errEl.textContent = '请输入用户名'; return; }
+  if (username.length < 2) { errEl.textContent = '用户名至少 2 个字符'; return; }
+  if (!email) { errEl.textContent = '请输入邮箱'; return; }
+  if (!password) { errEl.textContent = '请输入密码'; return; }
+  if (password.length < 6) { errEl.textContent = '密码至少 6 个字符'; return; }
+  errEl.textContent = '';
+  fetch('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: username, email: email, password: password, display_name: displayName })
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) throw new Error(data.detail || '注册失败');
+      return data;
+    });
+  }).then(function(data) {
+    AuthState.token = data.token;
+    AuthState.user = data.user;
+    localStorage.setItem('wc_auth_token', data.token);
+    hideAuthModal();
+    renderAuthUI();
+    toast('注册成功！欢迎 ' + (data.user.display_name || data.user.username), 'success');
+  }).catch(function(err) {
+    errEl.textContent = err.message || '注册失败，请稍后重试';
+  });
+}
+
+// ── Logout ──
+function handleLogout() {
+  fetch('/api/auth/logout', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + AuthState.token }
+  }).catch(function() { /* ignore network errors */ });
+  AuthState.token = null;
+  AuthState.user = null;
+  localStorage.removeItem('wc_auth_token');
+  renderAuthUI();
+  toast('已退出登录', 'info');
+}
+
+// ── Show auth profile (placeholder) ──
+function showAuthProfile() {
+  if (!AuthState.user) return;
+  var u = AuthState.user;
+  var body = '<div class="detail-stat"><span>用户名</span><span>' + escHtml(u.username) + '</span></div>' +
+    '<div class="detail-stat"><span>邮箱</span><span>' + escHtml(u.email) + '</span></div>' +
+    '<div class="detail-stat"><span>显示名称</span><span>' + escHtml(u.display_name || u.username) + '</span></div>' +
+    '<div class="detail-stat"><span>注册时间</span><span>' + escHtml((u.created_at || '').split('T')[0]) + '</span></div>';
+  showDetailPopup('<span>我的账号</span>', body);
+}
+
+// ── Close modal on outside click ──
+document.addEventListener('DOMContentLoaded', function() {
+  var m = document.getElementById('authModal');
+  if (m) {
+    m.addEventListener('click', function(e) {
+      if (e.target === m) hideAuthModal();
+    });
+  }
+  // Enter key support
+  document.getElementById('loginPassword').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') handleLogin();
+  });
+  document.getElementById('regPassword').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') handleRegister();
+  });
+  // Init auth
+  initAuth();
+});
 </script>
+<!-- ═══ Auth Modal ═══ -->
+<div class="auth-overlay" id="authModal">
+  <div class="auth-modal" id="authModalInner">
+    <h2>KnowSubtle</h2>
+    <div class="auth-tabs">
+      <button class="auth-tab active" data-tab="login" onclick="switchAuthTab('login')">登录</button>
+      <button class="auth-tab" data-tab="register" onclick="switchAuthTab('register')">注册</button>
+    </div>
+    <!-- 登录表单 -->
+    <div class="auth-form active" id="authFormLogin">
+      <div class="field"><label>用户名</label><input type="text" id="loginUsername" placeholder="输入用户名" autocomplete="username"></div>
+      <div class="field"><label>密码</label><input type="password" id="loginPassword" placeholder="输入密码" autocomplete="current-password"></div>
+      <button class="auth-btn" onclick="handleLogin()">登 录</button>
+      <div class="auth-error" id="authError"></div>
+    </div>
+    <!-- 注册表单 -->
+    <div class="auth-form" id="authFormRegister">
+      <div class="field"><label>用户名</label><input type="text" id="regUsername" placeholder="2-64 个字符" autocomplete="username"></div>
+      <div class="field"><label>邮箱</label><input type="email" id="regEmail" placeholder="your@email.com" autocomplete="email"></div>
+      <div class="field"><label>密码</label><input type="password" id="regPassword" placeholder="至少 6 个字符" autocomplete="new-password"></div>
+      <div class="field"><label>显示名称（可选）</label><input type="text" id="regDisplayName" placeholder="如何称呼你" autocomplete="name"></div>
+      <button class="auth-btn" onclick="handleRegister()">注 册</button>
+      <div class="auth-error" id="authErrorReg"></div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

@@ -319,6 +319,41 @@ class DailyAccuracy(Base):
     accuracy: float = Column(Float, default=0.0)
 
 
+# ════════════════════════════════════════════
+# 用户认证相关表
+# ════════════════════════════════════════════
+
+class User(Base):
+    """用户账号表"""
+    __tablename__ = "users"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    username: str = Column(String(64), unique=True, nullable=False, index=True)
+    email: str = Column(String(128), unique=True, nullable=False)
+    password_hash: str = Column(String(256), nullable=False)
+    password_salt: str = Column(String(32), nullable=False)
+    display_name: str = Column(String(64), default="")
+    avatar: str = Column(String(32), default="👤")
+    created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
+    last_login: datetime = Column(DateTime, default=None, nullable=True)
+    is_active: bool = Column(Boolean, default=True)
+
+
+class AuthToken(Base):
+    """登录令牌表"""
+    __tablename__ = "auth_tokens"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    user_id: int = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token: str = Column(String(128), unique=True, nullable=False, index=True)
+    created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
+    expires_at: datetime = Column(DateTime, nullable=False)
+    is_revoked: bool = Column(Boolean, default=False)
+
+    # 关系
+    user: User = relationship("User")
+
+
 class DailyGoal(Base):
     """每日目标"""
     __tablename__ = "daily_goals"
