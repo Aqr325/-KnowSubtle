@@ -3,8 +3,8 @@
 职责：
 1. 设置 metagpt / LLM 运行环境变量（兼容 local_metagpt stub 打桩）
 2. 启动 FastAPI 本地服务（uvicorn），并做端口冲突 / 单实例 / 就绪检测
-3. 用系统原生 WebView 打开仪表盘（真正的桌面窗口，无浏览器地址栏/标签页）；
-   若环境不支持（缺 WebView2 / 无显示等）则回退到默认浏览器，保证仍可用
+3. 默认用系统默认【浏览器】打开仪表盘（最可靠入口，无黑屏）；
+   原生 WebView 窗口仅作 opt-in（设置 KS_FORCE_WEBVIEW=1），因本机多次黑屏无法渲染
 
 关键设计（2026-07-15 修复黑屏后 "无法访问"）：
 - 服务运行在【独立受控线程】，进程生消亡不再绑定 WebView 窗口。
@@ -231,9 +231,19 @@ def _open_native_window(port: int) -> str:
         _log("服务启动超时，未能打开界面。")
         return "failed"
 
-    # WebView2 不可用 或 用户显式强制浏览器模式 → 直接开浏览器，绝不创建黑窗
-    if (not _webview2_available()) or os.environ.get("KS_FORCE_BROWSER"):
-        _log("WebView2 不可用 / 强制浏览器模式：改用默认浏览器打开仪表盘。")
+    # 默认浏览器模式：本机原生 WebView 多次黑屏、无法可靠渲染，浏览器才是最稳的入口。
+    # 仅当用户显式设置 KS_FORCE_WEBVIEW=1 时才尝试原生窗口（保留作调试路径）。
+    if not os.environ.get("KS_FORCE_WEBVIEW"):
+        _log("默认使用浏览器打开仪表盘（原生 WebView 在本机不稳定，统一走浏览器）。")
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return "browser"
+
+    # 以下为 opt-in 的原生 WebView 路径（KS_FORCE_WEBVIEW=1 时）：
+    if not _webview2_available():
+        _log("WebView2 不可用，改用默认浏览器打开仪表盘。")
         try:
             webbrowser.open(url)
         except Exception:
@@ -331,6 +341,7 @@ def _run_control_window(url: str):
         except Exception:
             pass
 
+    tk.Button(root, text="打开仪表盘", command=lambda: webbrowser.open(url), width=14, height=1).pack(pady=4)
     tk.Button(root, text="退出应用", command=_quit, width=14, height=1).pack(pady=6)
     root.protocol("WM_DELETE_WINDOW", _quit)
     root.mainloop()
