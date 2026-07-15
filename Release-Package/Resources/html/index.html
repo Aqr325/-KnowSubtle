@@ -4729,6 +4729,8 @@ function switchAuthTab(tab) {
 function handleLogin() {
   var username = document.getElementById('loginUsername').value.trim();
   var password = document.getElementById('loginPassword').value;
+  var rememberEl = document.getElementById('loginRemember');
+  var remember = rememberEl ? rememberEl.checked : false;
   var errEl = document.getElementById('authError');
   if (!username) { errEl.textContent = '请输入用户名'; return; }
   if (!password) { errEl.textContent = '请输入密码'; return; }
@@ -4736,7 +4738,7 @@ function handleLogin() {
   fetch('/api/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: username, password: password })
+    body: JSON.stringify({ username: username, password: password, remember: remember })
   }).then(function(r) {
     return r.json().then(function(data) {
       if (!r.ok) throw new Error(data.detail || '登录失败');
@@ -4843,6 +4845,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="auth-form active" id="authFormLogin">
       <div class="field"><label>用户名</label><input type="text" id="loginUsername" placeholder="输入用户名" autocomplete="username"></div>
       <div class="field"><label>密码</label><input type="password" id="loginPassword" placeholder="输入密码" autocomplete="current-password"></div>
+      <label class="remember-row"><input type="checkbox" id="loginRemember"> 记住我（30 天免登录）</label>
       <button class="auth-btn" onclick="handleLogin()">登 录</button>
       <div class="auth-error" id="authError"></div>
     </div>

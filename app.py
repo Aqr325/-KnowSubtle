@@ -60,6 +60,8 @@ from learning_agent_system.schema import (
     ModuleStatus,
 )
 
+from learning_agent_system.database.request_scope import current_user_id
+
 
 # ── Pydantic Request Models ──
 class CreateSessionRequest(BaseModel):
@@ -93,6 +95,7 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1, max_length=128)
+    remember: bool = False  # 勾选「记住我」→ 长效登录（30 天）
 
 # ── Logging ──
 logging.basicConfig(
@@ -160,6 +163,30 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+@app.middleware("http")
+async def user_scope_middleware(request: Request, call_next):
+    """解析 Bearer token → 当前用户 id，注入请求作用域 contextvar，供 Repository/Orchestrator 做数据隔离。"""
+    uid = None
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token_str = auth[len("Bearer "):].strip()
+        if token_str:
+            try:
+                async with get_async_session() as s:
+                    user = await UserRepository(s).get_user_by_token(token_str)
+                    if user:
+                        uid = user.id
+            except Exception:
+                uid = None
+    request.state.user_id = uid
+    ctx_token = current_user_id.set(uid)
+    try:
+        return await call_next(request)
+    finally:
+        current_user_id.reset(ctx_token)
+
 
 # ── 路径解析（开发模式 / PyInstaller 打包后通用）──
 def _app_root() -> Path:
@@ -322,14 +349,20 @@ def _has_meaningful_session() -> bool:
 
 
 def _load_current_ctx():
-    """加载当前会话上下文：优先用 _current_session_id，否则回退到最新会话。
+    """加载当前会话上下文：优先用 _current_session_id（需为当前用户所有），否则回退到最新会话。
 
     统一替代散落的 `_load_current_ctx()`，
-    避免多会话下各数据端点指向不同 session 的不一致问题。
+    避免多会话下各数据端点指向不同 session 的不一致问题；并按用户隔离。
     """
     orch = get_orchestrator()
+    # 全局记录的 session 仅在「能为当前用户加载成功」时使用（隔离校验）
+    if _current_session_id:
+        ctx = orch.load_session(_current_session_id)
+        if ctx:
+            return ctx
+    # 回退到当前用户的最新会话
     sessions = orch.list_sessions()
-    sid = _current_session_id or (sessions[0] if sessions else None)
+    sid = sessions[0] if sessions else None
     return orch.load_session(sid) if sid else None
 
 
@@ -1068,16 +1101,23 @@ async def agent_chat(request: AgentChatRequest) -> Dict[str, Any]:
 # ====================================================================
 
 async def _get_current_user(request: Request) -> Optional[Dict[str, Any]]:
-    """从 Authorization header 解析当前用户（可选鉴权——匿名访问可继续）。"""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        return None
-    token_str = auth[len("Bearer "):].strip()
-    if not token_str:
-        return None
+    """从 Authorization header / 请求作用域解析当前用户（可选鉴权——匿名访问可继续）。"""
+    # 优先复用中间件已解析的 user_id（避免重复查库）
+    uid = getattr(request.state, "user_id", None)
+    if uid is None:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return None
+        token_str = auth[len("Bearer "):].strip()
+        if not token_str:
+            return None
+        async with get_async_session() as session:
+            user = await UserRepository(session).get_user_by_token(token_str)
+            if not user:
+                return None
+            uid = user.id
     async with get_async_session() as session:
-        repo = UserRepository(session)
-        user = await repo.get_user_by_token(token_str)
+        user = await UserRepository(session).get_by_id(uid)
         if not user:
             return None
         return {
@@ -1154,9 +1194,10 @@ async def login(body: LoginRequest) -> Dict[str, Any]:
         if not user:
             raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-        # 生成 token
+        # 生成 token：勾选「记住我」= 30 天长效，否则 24 小时
+        ttl_hours = 24 * 30 if body.remember else 24
         try:
-            token = await repo.create_token(user.id)
+            token = await repo.create_token(user.id, ttl_hours=ttl_hours)
         except Exception as e:
             logger.error(f"登录生成 token 失败: {e}")
             raise HTTPException(status_code=500, detail="登录失败，请稍后重试")
@@ -1213,7 +1254,7 @@ import math
 from datetime import datetime, timedelta
 
 # 数据库查询替代 JSON 文件
-from learning_agent_system.database.repo import StatsRepository, VocabRepository, DailyGoalRepository, UserRepository
+from learning_agent_system.database.repo import StatsRepository, VocabRepository, DailyGoalRepository, UserRepository, User
 
 
 @app.get("/api/stats/dashboard")

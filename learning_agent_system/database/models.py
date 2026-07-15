@@ -43,6 +43,7 @@ class Session(Base):
     current_phase: str = Column(String(32), default="profiling")
     created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
     updated_at: datetime = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+    user_id: int = Column(Integer, nullable=True, index=True)  # 账号隔离：NULL = 匿名共享
 
     # 一对一关系
     learning_goal: "LearningGoal" = relationship("LearningGoal", back_populates="session", uselist=False, cascade="all, delete-orphan")
@@ -287,9 +288,12 @@ class Vocab(Base):
     last_reviewed: str = Column(String(32), default="")
     word_lower: str = Column(String(128), default=None, nullable=True)
     created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
+    user_id: int = Column(Integer, nullable=True, index=True)  # 账号隔离：NULL = 匿名共享
 
     __table_args__ = (
-        UniqueConstraint("word", "subject", name="uq_vocab_word_subject"),
+        # 显式命名唯一索引（SQLite 对 UniqueConstraint 会忽略名称生成 sqlite_autoindex_*，
+        # 仅对 CREATE UNIQUE INDEX 保留显式名称，便于旧库迁移时删除/重建）
+        Index("uq_vocab_word_subject_user", "word", "subject", "user_id", unique=True),
         Index("ix_vocab_subject_word", "subject", "word"),
     )
 
@@ -298,25 +302,40 @@ class DailyStats(Base):
     """每日学习时长"""
     __tablename__ = "daily_stats"
     id: int = Column(Integer, primary_key=True, autoincrement=True)
-    date: str = Column(String(32), unique=True, nullable=False, index=True)
+    date: str = Column(String(32), nullable=False, index=True)
     minutes: float = Column(Float, default=0.0)
+    user_id: int = Column(Integer, nullable=True, index=True)  # 账号隔离：NULL = 匿名共享
+
+    __table_args__ = (
+        Index("uq_daily_stats_date_user", "date", "user_id", unique=True),
+    )
 
 
 class DailyWords(Base):
     """每日词汇量"""
     __tablename__ = "daily_words"
     id: int = Column(Integer, primary_key=True, autoincrement=True)
-    date: str = Column(String(32), unique=True, nullable=False, index=True)
+    date: str = Column(String(32), nullable=False, index=True)
     new_words: int = Column(Integer, default=0)
     total_words: int = Column(Integer, default=0)
+    user_id: int = Column(Integer, nullable=True, index=True)  # 账号隔离：NULL = 匿名共享
+
+    __table_args__ = (
+        Index("uq_daily_words_date_user", "date", "user_id", unique=True),
+    )
 
 
 class DailyAccuracy(Base):
     """每日准确率"""
     __tablename__ = "daily_accuracy"
     id: int = Column(Integer, primary_key=True, autoincrement=True)
-    date: str = Column(String(32), unique=True, nullable=False, index=True)
+    date: str = Column(String(32), nullable=False, index=True)
     accuracy: float = Column(Float, default=0.0)
+    user_id: int = Column(Integer, nullable=True, index=True)  # 账号隔离：NULL = 匿名共享
+
+    __table_args__ = (
+        Index("uq_daily_accuracy_date_user", "date", "user_id", unique=True),
+    )
 
 
 # ════════════════════════════════════════════
@@ -358,10 +377,15 @@ class DailyGoal(Base):
     """每日目标"""
     __tablename__ = "daily_goals"
     id: int = Column(Integer, primary_key=True, autoincrement=True)
-    date: str = Column(String(32), unique=True, nullable=False, index=True)
+    date: str = Column(String(32), nullable=False, index=True)
     pomodoros_target: int = Column(Integer, default=4)
     words_target: int = Column(Integer, default=20)
     minutes_target: int = Column(Integer, default=60)
     pomodoros_done: int = Column(Integer, default=0)
     words_done: int = Column(Integer, default=0)
     minutes_done: int = Column(Integer, default=0)
+    user_id: int = Column(Integer, nullable=True, index=True)  # 账号隔离：NULL = 匿名共享
+
+    __table_args__ = (
+        Index("uq_daily_goals_date_user", "date", "user_id", unique=True),
+    )
