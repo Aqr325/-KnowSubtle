@@ -173,6 +173,43 @@ def _record_url(url: str):
         pass
 
 
+def _write_diagnose(title: str, detail: str):
+    """把启动诊断落地成文件，便于用户零成本回传（无需打字描述）。
+
+    同时写到 %APPDATA%/KnowSubtle/diagnose.txt 与桌面 diagnose.txt，
+    并在错误框中提示路径，用户把文件发回即可精准定位。
+    """
+    try:
+        appdata = Path(os.environ.get("APPDATA", str(ROOT))) / "KnowSubtle"
+        desktop = Path.home() / "Desktop"
+        last_url = ""
+        try:
+            last_url = (appdata / "last_url.txt").read_text(encoding="utf-8", errors="replace").strip()
+        except Exception:
+            pass
+        db_path = os.environ.get("LAS_DB_PATH") or str(appdata / "Data" / "knowsubtle.db")
+        lines = [
+            "=== KnowSubtle 启动诊断 (diagnose) ===",
+            f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"exe 路径: {sys.executable}",
+            f"标题: {title}",
+            f"详情: {detail}",
+            f"服务线程错误(_server_error): {_server_error}",
+            f"本应监听 URL (last_url.txt): {last_url}",
+            f"推断数据库路径: {db_path}",
+            f"APPDATA: {os.environ.get('APPDATA')}",
+        ]
+        text = "\n".join(lines)
+        for d in (appdata, desktop):
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "diagnose.txt").write_text(text, encoding="utf-8")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def _webview2_available() -> bool:
     """检测系统是否安装 Microsoft Edge WebView2 Runtime。
     未安装时 pywebview 会创建出黑窗或抛错，这里提前识别并改用浏览器，避免沉默黑屏。"""
@@ -215,6 +252,16 @@ def _start_server(app, host: str, port: int):
         _server_error = f"{type(e).__name__}: {e}"
         _log(f"服务线程异常: {_server_error}")
         traceback.print_exc()
+        _write_diagnose("服务线程异常", _server_error)
+    # 兜底：线程结束但端口未真正监听（uvicorn 内部 startup 失败可能静默退出且不抛异常，
+    # 典型为数据库/迁移错误）。此时若非用户主动退出，则记录诊断，避免任何失败路径漏诊。
+    try:
+        if not stop_event.is_set() and not _probe_url(f"http://{host}:{port}/"):
+            if _server_error is None:
+                _server_error = "(uvicorn 启动失败但未抛出异常，多为数据库/迁移错误)"
+            _write_diagnose("服务线程结束但未监听", _server_error)
+    except Exception:
+        pass
 
 
 def _open_native_window(port: int) -> str:
@@ -229,12 +276,14 @@ def _open_native_window(port: int) -> str:
     url = f"http://127.0.0.1:{port}/"
     if not _is_server_up(url):
         _log("服务启动超时，未能打开界面。")
+        _write_diagnose("服务启动超时", f"url={url}, error={_server_error}")
         return "failed"
 
     # 默认浏览器模式：本机原生 WebView 多次黑屏、无法可靠渲染，浏览器才是最稳的入口。
     # 仅当用户显式设置 KS_FORCE_WEBVIEW=1 时才尝试原生窗口（保留作调试路径）。
     if not os.environ.get("KS_FORCE_WEBVIEW"):
         _log("默认使用浏览器打开仪表盘（原生 WebView 在本机不稳定，统一走浏览器）。")
+        _write_diagnose("启动成功(浏览器模式)", f"url={url}")
         try:
             webbrowser.open(url)
         except Exception:
@@ -356,11 +405,14 @@ def main():
         err = f"{type(e).__name__}: {e}"
         _log(f"导入后端模块失败: {err}")
         _tb.print_exc()
+        _write_diagnose("导入后端模块失败", err)
         _show_error_box(
             "KnowSubtle 启动失败",
             f"加载后端模块 (app) 时失败，服务无法启动。\n\n"
             f"错误：{err}\n\n"
-            f"请查看日志：%APPDATA%\\KnowSubtle\\Logs\\stderr.log",
+            f"诊断文件已生成，请直接发我：\n"
+            f"%APPDATA%\\KnowSubtle\\diagnose.txt\n（也已复制到桌面 diagnose.txt）\n\n"
+            f"或查看日志：%APPDATA%\\KnowSubtle\\Logs\\stderr.log",
         )
         return
 
@@ -412,7 +464,9 @@ def main():
             f"本地服务在超时内未能启动。\n\n"
             f"本应监听的地址：{url}\n\n"
             f"错误详情：{_server_error or '（未见异常，可能是首次启动较慢或端口被占用）'}\n\n"
-            f"请查看日志：%APPDATA%\\KnowSubtle\\Logs\\stderr.log",
+            f"诊断文件已生成，请直接发我：\n"
+            f"%APPDATA%\\KnowSubtle\\diagnose.txt\n（也已复制到桌面 diagnose.txt）\n\n"
+            f"或查看日志：%APPDATA%\\KnowSubtle\\Logs\\stderr.log",
         )
     # 其余（webview 正常关闭）直接收尾
     _shutdown(server_thread)
