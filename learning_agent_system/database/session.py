@@ -160,6 +160,43 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+def _column_default_literal(col) -> str:
+    """为新模型里有、但旧表里没有的列生成安全的 INSERT 默认值字面量。
+
+    否则像 vocab.created_at（NOT NULL 且只有 Python 端 default=datetime.now、无 SQL
+    server_default）在重建 INSERT 时会落 NULL → 触发 NOT NULL 约束崩溃，导致 init_db
+    抛异常、后端服务起不来、浏览器 ERR_CONNECTION_REFUSED。
+    """
+    # 优先使用 SQL 层 server_default
+    sd = getattr(col, "server_default", None)
+    if sd is not None:
+        arg = getattr(sd, "arg", None)
+        if arg is not None:
+            return str(arg)
+    # 标量 Python default
+    d = getattr(col, "default", None)
+    if d is not None and getattr(d, "is_scalar", False):
+        return repr(d.arg)
+    # 按类型给兜底字面量
+    from sqlalchemy import DateTime, String, Text, Integer, Boolean, Float
+
+    t = col.type
+    try:
+        if isinstance(t, DateTime):
+            return "'2026-01-01 00:00:00'"
+        if isinstance(t, (String, Text)):
+            return "''"
+        if isinstance(t, Boolean):
+            return "0"
+        if isinstance(t, Integer):
+            return "0"
+        if isinstance(t, Float):
+            return "0.0"
+    except Exception:
+        pass
+    return "''"
+
+
 async def _rebuild_table_with_unique(conn, tname: str) -> None:
     """
     重建含 user_id 的共享表，解决旧库唯一约束由 SQLite 自动索引（sqlite_autoindex_*）
@@ -169,16 +206,30 @@ async def _rebuild_table_with_unique(conn, tname: str) -> None:
     → 拷贝数据 → 删除旧表 → 按模型元数据重建全部索引（含复合唯一索引，使用显式命名）。
     显式 Index(..., unique=True) 在 SQLite 中会保留名称（UNIQUE CONSTRAINT 则不会），
     因此重建后索引名为 uq_*，可被后续迁移安全管理。
+
+    健壮性：
+    - 先 DROP TABLE IF EXISTS _{tname}_old，避免上次中断的重建遗留同名表导致 RENAME 失败；
+    - 旧表缺少的列（新模型新增、可能 NOT NULL 无 server_default）用 _column_default_literal
+      补默认值，避免 NOT NULL 约束崩溃。
     """
     new_table = Base.metadata.tables[tname]
-    ddl = str(CreateTable(new_table).compile(dialect=_sqlite_dialect()))
+    # 幂等：清理上次可能中断遗留的临时表
+    await conn.execute(text(f"DROP TABLE IF EXISTS _{tname}_old"))
     old_cols = [r[1] for r in (await conn.execute(text(f"PRAGMA table_info({tname})"))).fetchall()]
     new_cols = [c.name for c in new_table.columns]
-    copy_cols = [c for c in new_cols if c in old_cols]
-    col_sql = ", ".join(copy_cols)
+    # 构建 SELECT 表达式：旧表有的列直接拷贝；旧表没有的列给安全默认值
+    select_exprs = []
+    for c in new_table.columns:
+        if c.name in old_cols:
+            select_exprs.append(c.name)
+        else:
+            select_exprs.append(f"{_column_default_literal(c)} AS {c.name}")
+    insert_cols = ", ".join(new_cols)
+    select_sql = ", ".join(select_exprs)
+    ddl = str(CreateTable(new_table).compile(dialect=_sqlite_dialect()))
     await conn.execute(text(f"ALTER TABLE {tname} RENAME TO _{tname}_old"))
     await conn.execute(text(ddl))
-    await conn.execute(text(f"INSERT INTO {tname} ({col_sql}) SELECT {col_sql} FROM _{tname}_old"))
+    await conn.execute(text(f"INSERT INTO {tname} ({insert_cols}) SELECT {select_sql} FROM _{tname}_old"))
     await conn.execute(text(f"DROP TABLE _{tname}_old"))
     # 重建模型定义的所有索引（唯一 + 非唯一），使用显式命名
     for ix in new_table.indexes:
@@ -258,7 +309,10 @@ async def init_db(migrate: bool = True):
                     except Exception:
                         _need_rebuild = True
             if _need_rebuild:
-                await _rebuild_table_with_unique(conn, _t)
+                try:
+                    await _rebuild_table_with_unique(conn, _t)
+                except Exception as _re:
+                    logger.warning("重建表 %s 失败（跳过，服务仍会启动）: %s: %s", _t, type(_re).__name__, _re)
             else:
                 # 期望索引已存在（已是复合唯一）或旧命名索引已成功删除 → 补建显式命名索引
                 await conn.execute(text(
@@ -269,10 +323,13 @@ async def init_db(migrate: bool = True):
 
     logger.info(f"数据库初始化完成: {DB_PATH}")
 
-    # 尝试从 JSON 导入
+    # 尝试从 JSON 导入（异常不应阻断服务启动）
     if migrate:
-        await migrate_json_to_db()
-        logger.info("JSON 数据迁移检查完成")
+        try:
+            await migrate_json_to_db()
+            logger.info("JSON 数据迁移检查完成")
+        except Exception as _je:
+            logger.warning("JSON 数据迁移失败（跳过，服务仍会启动）: %s: %s", type(_je).__name__, _je)
 
 
 async def close_db():
