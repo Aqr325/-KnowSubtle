@@ -51,6 +51,9 @@ if getattr(sys, "frozen", False):
 # 服务生命周期由该事件控制：置位 → uvicorn 退出 → 进程退出
 stop_event = threading.Event()
 
+# 记录服务线程中的致命异常（供 main 在 failed 路径展示给用户）
+_server_error = None
+
 
 def _log(msg: str):
     try:
@@ -71,7 +74,7 @@ def _find_free_port(preferred: int, host: str = "127.0.0.1", span: int = 100) ->
     return preferred  # 都满了，交回给 uvicorn 报错
 
 
-def _is_server_up(url: str, timeout: float = 20.0) -> bool:
+def _is_server_up(url: str, timeout: float = 60.0) -> bool:
     """轮询直到服务返回 200，替代盲目的固定 sleep。"""
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -169,7 +172,9 @@ def _webview2_available() -> bool:
 def _start_server(app, host: str, port: int):
     """在独立线程中运行 uvicorn；stop_event 置位时优雅退出。"""
     import uvicorn
+    import traceback
 
+    global _server_error
     config = uvicorn.Config(app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
 
@@ -179,7 +184,12 @@ def _start_server(app, host: str, port: int):
         server.should_exit = True
 
     threading.Thread(target=_watch_stop, daemon=True).start()
-    server.run()
+    try:
+        server.run()
+    except Exception as e:  # 服务线程异常：记录并暴露给 main，避免静默死亡导致连接被拒
+        _server_error = f"{type(e).__name__}: {e}"
+        _log(f"服务线程异常: {_server_error}")
+        traceback.print_exc()
 
 
 def _open_native_window(port: int) -> str:
@@ -345,7 +355,16 @@ def main():
     if mode in ("browser", "black-fallback"):
         # 回退路径：用控制窗口保活，确保浏览器里的服务不会因窗口销毁而消失
         _run_control_window(url)
-    # 其余（webview 正常关闭 / failed）直接收尾
+    elif mode == "failed":
+        # 服务启动失败：给出可见错误，避免静默退出让用户毫无头绪
+        _show_error_box(
+            "KnowSubtle 启动失败",
+            f"本地服务在超时内未能启动。\n\n"
+            f"本应监听的地址：{url}\n\n"
+            f"错误详情：{_server_error or '（未见异常，可能是首次启动较慢或端口被占用）'}\n\n"
+            f"请查看日志：%APPDATA%\\KnowSubtle\\Logs\\stderr.log",
+        )
+    # 其余（webview 正常关闭）直接收尾
     _shutdown(server_thread)
 
 
@@ -355,6 +374,35 @@ def _shutdown(server_thread: threading.Thread):
         server_thread.join(timeout=10)
     except Exception:
         pass
+
+
+def _show_error_box(title: str, message: str):
+    """失败时给出可见的提示（而非静默退出）。tkinter 不可用时退化为阻塞等待。"""
+    try:
+        import tkinter as tk
+    except Exception:
+        _log(f"[{title}] {message}")
+        try:
+            while not stop_event.is_set():
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+        return
+    try:
+        root = tk.Tk()
+        root.title(title)
+        root.geometry("540x250")
+        tk.Label(root, text=message, wraplength=500, justify="left", anchor="w").pack(
+            padx=16, pady=16, anchor="w"
+        )
+        tk.Button(
+            root, text="退出", width=12,
+            command=lambda: (stop_event.set(), root.destroy()),
+        ).pack(pady=8)
+        root.protocol("WM_DELETE_WINDOW", lambda: (stop_event.set(), root.destroy()))
+        root.mainloop()
+    except Exception:
+        _log(f"[{title}] {message}")
 
 
 if __name__ == "__main__":
