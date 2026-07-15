@@ -1,5 +1,5 @@
 {
   "app_name": "KnowSubtle Learning Universe",
-  "port": 8000,
+  "port": 8753,
   "host": "127.0.0.1"
 }

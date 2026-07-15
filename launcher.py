@@ -179,7 +179,7 @@ def main():
     from app import app, load_app_config
 
     cfg = load_app_config()
-    preferred = int(cfg.get("port", 8000))
+    preferred = int(cfg.get("port", 8753))
     host = cfg.get("host", "127.0.0.1")
 
     # 单实例：若目标端口已有实例在跑（说明窗口已打开），直接退出避免重复
