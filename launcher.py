@@ -88,6 +88,15 @@ def _is_server_up(url: str, timeout: float = 60.0) -> bool:
     return False
 
 
+def _probe_url(url: str, timeout: float = 1.0) -> bool:
+    """一次性的快速探测，用于判断「旧实例」是否真在服务（区分存活实例与僵尸进程）。"""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
 def _pid_alive(pid: int) -> bool:
     """跨平台判断进程是否存活（Windows 下 os.kill(pid,0) 用于探活）。"""
     if not pid:
@@ -102,11 +111,12 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _acquire_instance_lock(port: int):
-    """基于 PID 锁文件的单实例判定。
+    """基于 PID 锁文件的单实例判定（带僵尸实例识别）。
 
     返回 (acquired, existing_url)：
-    - 若已有【存活】实例持有锁 → 返回 (False, 它的 url)，调用方应直接打开该 url 并退出；
-    - 否则写入自己的锁，返回 (True, None)。
+    - 若已有【存活且真正在服务】的实例 → 返回 (False, 它的 url)，调用方打开并退出；
+    - 若旧实例进程在、但端口无响应（僵尸）→ 杀掉它、清锁，返回 (True, None) 让自己启动；
+    - 其余（无锁 / 锁损坏 / 不可写）→ 写入自己的锁，返回 (True, None)。
     """
     try:
         lock_dir = Path(os.environ.get("APPDATA", str(ROOT))) / "KnowSubtle"
@@ -115,8 +125,23 @@ def _acquire_instance_lock(port: int):
         if lock.exists():
             try:
                 data = json.loads(lock.read_text(encoding="utf-8"))
-                if _pid_alive(int(data.get("pid", 0))):
-                    return False, str(data.get("url", ""))
+                old_pid = int(data.get("pid", 0))
+                old_port = int(data.get("port", port))
+                old_url = str(data.get("url", f"http://127.0.0.1:{old_port}/"))
+                if _pid_alive(old_pid):
+                    # 区分「真在服务的实例」与「僵尸进程」：探测端口是否响应
+                    if _probe_url(old_url):
+                        return False, old_url
+                    # 僵尸：进程在但服务无响应，强制结束并接管
+                    _log(f"检测到僵尸旧实例 (pid={old_pid})：进程存活但端口无响应，尝试结束以接管。")
+                    try:
+                        os.kill(old_pid, 9)
+                    except Exception:
+                        pass
+                    try:
+                        lock.unlink()
+                    except Exception:
+                        pass
             except Exception:
                 pass
         lock.write_text(
@@ -312,7 +337,21 @@ def _run_control_window(url: str):
 
 
 def main():
-    from app import app, load_app_config
+    try:
+        from app import app, load_app_config
+    except Exception as e:
+        import traceback as _tb
+
+        err = f"{type(e).__name__}: {e}"
+        _log(f"导入后端模块失败: {err}")
+        _tb.print_exc()
+        _show_error_box(
+            "KnowSubtle 启动失败",
+            f"加载后端模块 (app) 时失败，服务无法启动。\n\n"
+            f"错误：{err}\n\n"
+            f"请查看日志：%APPDATA%\\KnowSubtle\\Logs\\stderr.log",
+        )
+        return
 
     cfg = load_app_config()
     preferred = int(cfg.get("port", 8753))
