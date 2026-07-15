@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import Session as SyncSession
 from sqlalchemy import text
+from sqlalchemy.schema import CreateTable, CreateIndex
+from sqlalchemy.dialects.sqlite import dialect as _sqlite_dialect
 from contextlib import asynccontextmanager
 
 from .models import Base
@@ -158,6 +160,31 @@ async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+async def _rebuild_table_with_unique(conn, tname: str) -> None:
+    """
+    重建含 user_id 的共享表，解决旧库唯一约束由 SQLite 自动索引（sqlite_autoindex_*）
+    实现、而自动索引无法通过 DROP INDEX 删除的问题。
+
+    做法：重命名旧表 → 按当前 SQLAlchemy 元数据建新表（不含唯一索引）
+    → 拷贝数据 → 删除旧表 → 按模型元数据重建全部索引（含复合唯一索引，使用显式命名）。
+    显式 Index(..., unique=True) 在 SQLite 中会保留名称（UNIQUE CONSTRAINT 则不会），
+    因此重建后索引名为 uq_*，可被后续迁移安全管理。
+    """
+    new_table = Base.metadata.tables[tname]
+    ddl = str(CreateTable(new_table).compile(dialect=_sqlite_dialect()))
+    old_cols = [r[1] for r in (await conn.execute(text(f"PRAGMA table_info({tname})"))).fetchall()]
+    new_cols = [c.name for c in new_table.columns]
+    copy_cols = [c for c in new_cols if c in old_cols]
+    col_sql = ", ".join(copy_cols)
+    await conn.execute(text(f"ALTER TABLE {tname} RENAME TO _{tname}_old"))
+    await conn.execute(text(ddl))
+    await conn.execute(text(f"INSERT INTO {tname} ({col_sql}) SELECT {col_sql} FROM _{tname}_old"))
+    await conn.execute(text(f"DROP TABLE _{tname}_old"))
+    # 重建模型定义的所有索引（唯一 + 非唯一），使用显式命名
+    for ix in new_table.indexes:
+        await conn.execute(text(str(CreateIndex(ix).compile(dialect=_sqlite_dialect()))))
+
+
 async def init_db(migrate: bool = True):
     """
     初始化数据库：创建所有表（如果不存在）。
@@ -186,6 +213,58 @@ async def init_db(migrate: bool = True):
             await conn.execute(text("ALTER TABLE vocab ADD COLUMN word_lower VARCHAR"))
         await conn.execute(text("UPDATE vocab SET word_lower = lower(word) WHERE word_lower IS NULL"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_vocab_word_lower ON vocab(word_lower, subject)"))
+
+        # ── 用户隔离迁移：为会话表与全局共享表补充 user_id 列，并修正唯一约束 ──
+        # 旧库 create_all 不会补列；匿名历史数据 user_id 为 NULL，向后兼容（user_id IS NULL）。
+        for _t, _need in (
+            ("sessions", ("user_id",)),
+            ("vocab", ("user_id",)),
+            ("daily_stats", ("user_id",)),
+            ("daily_words", ("user_id",)),
+            ("daily_accuracy", ("user_id",)),
+            ("daily_goals", ("user_id",)),
+        ):
+            _cols = [r[1] for r in (await conn.execute(text(f"PRAGMA table_info({_t})"))).fetchall()]
+            for _c in _need:
+                if _c not in _cols:
+                    await conn.execute(text(f"ALTER TABLE {_t} ADD COLUMN {_c} INTEGER"))
+
+        # ── 共享表唯一约束迁移（账号隔离）──
+        # 旧库用单列唯一（vocab: word+subject；daily_*: date），现改为按用户隔离的复合唯一。
+        # 注意：SQLite 对 UNIQUE CONSTRAINT 会生成 sqlite_autoindex_* 且无法通过 DROP INDEX
+        # 删除；对显式 CREATE UNIQUE INDEX 才保留名称。因此模型改用 Index(..., unique=True)，
+        # 此处策略：若现有唯一索引列与期望不符且无法删除（自动索引）→ 重建表；否则补建显式索引。
+        # 期望唯一索引（列 + 显式名称）：
+        _unique_specs = {
+            "vocab": (("word", "subject", "user_id"), "uq_vocab_word_subject_user"),
+            "daily_stats": (("date", "user_id"), "uq_daily_stats_date_user"),
+            "daily_words": (("date", "user_id"), "uq_daily_words_date_user"),
+            "daily_accuracy": (("date", "user_id"), "uq_daily_accuracy_date_user"),
+            "daily_goals": (("date", "user_id"), "uq_daily_goals_date_user"),
+        }
+        for _t, (_ucols, _uname) in _unique_specs.items():
+            _need_rebuild = False
+            _idxs = (await conn.execute(text(f"PRAGMA index_list({_t})"))).fetchall()
+            for _idx in _idxs:
+                _iname, _iunique = _idx[1], _idx[2]
+                if not _iunique:
+                    continue
+                _info = (await conn.execute(text(f"PRAGMA index_info({_iname})"))).fetchall()
+                _icols = tuple(c[2] for c in _info)
+                if _icols != _ucols:
+                    # 旧唯一约束与期望不同，需移除；自动索引无法 DROP → 重建表
+                    try:
+                        await conn.execute(text(f"DROP INDEX IF EXISTS {_iname}"))
+                    except Exception:
+                        _need_rebuild = True
+            if _need_rebuild:
+                await _rebuild_table_with_unique(conn, _t)
+            else:
+                # 期望索引已存在（已是复合唯一）或旧命名索引已成功删除 → 补建显式命名索引
+                await conn.execute(text(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {_uname} ON {_t}({', '.join(_ucols)})"
+                ))
+
         await conn.execute(text("PRAGMA busy_timeout=5000"))
 
     logger.info(f"数据库初始化完成: {DB_PATH}")

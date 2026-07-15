@@ -57,6 +57,22 @@ def _now() -> str:
 
 
 # ════════════════════════════════════════════
+# 账号隔离：请求作用域 user_id（匿名为 None）
+# ══════════════════════════════════════════
+
+from .request_scope import current_user_id
+
+_UNSET = object()
+
+
+def _resolve_user_id(user_id):
+    """user_id 未显式传入时回退到请求作用域 contextvar（由 app 中间件在每次请求注入）。"""
+    if user_id is _UNSET:
+        return current_user_id.get()
+    return user_id
+
+
+# ════════════════════════════════════════════
 # SessionRepository — 会话管理
 # ════════════════════════════════════════════
 
@@ -227,24 +243,31 @@ class SessionRepository:
 # ════════════════════════════════════════════
 
 class VocabRepository:
-    """Vocab CRUD + 按学科过滤"""
+    """Vocab CRUD + 按学科/用户过滤"""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, user_id=_UNSET):
         self._session = session
+        self._user_id = _resolve_user_id(user_id)
+
+    def _user_filter(self):
+        if self._user_id is None:
+            return [Vocab.user_id.is_(None)]
+        return [Vocab.user_id == self._user_id]
 
     async def get_by_subject(self, subject: Optional[str] = None) -> List[Vocab]:
-        """获取词库，可选按学科过滤"""
+        """获取词库，可选按学科/用户过滤"""
+        conds = self._user_filter()
         if subject:
-            result = await self._session.execute(
-                select(Vocab).where(Vocab.subject == subject)
-                .order_by(Vocab.id)
-            )
-        else:
-            result = await self._session.execute(select(Vocab).order_by(Vocab.id))
+            conds.append(Vocab.subject == subject)
+        result = await self._session.execute(
+            select(Vocab).where(*conds).order_by(Vocab.id)
+        )
         return result.scalars().all()
 
     async def get_by_id(self, word_id: int) -> Optional[Vocab]:
-        return await self._session.get(Vocab, word_id)
+        conds = self._user_filter()
+        conds.append(Vocab.id == word_id)
+        return await self._session.scalar(select(Vocab).where(*conds))
 
     async def add(
         self, word: str, meaning: str = "", notes: str = "", example: str = "",
@@ -256,7 +279,7 @@ class VocabRepository:
         """
         existing = await self._session.scalar(
             select(Vocab).where(
-                and_(Vocab.word_lower == word.lower(), Vocab.subject == subject)
+                and_(*self._user_filter(), Vocab.word_lower == word.lower(), Vocab.subject == subject)
             )
         )
         if existing:
@@ -265,6 +288,7 @@ class VocabRepository:
         v = Vocab(
             word=word, word_lower=word.lower(), meaning=meaning, notes=notes, example=example,
             source=source, subject=subject, mastered=mastered,
+            user_id=self._user_id,
             created_at=datetime.now(),
         )
         self._session.add(v)
@@ -305,14 +329,16 @@ class VocabRepository:
         return await self.get_by_id(word_id)
 
     async def get_stats(self) -> Dict[str, int]:
-        """词库统计"""
-        total = await self._session.scalar(select(func.count()).select_from(Vocab)) or 0
+        """词库统计（按当前用户隔离）"""
+        total = await self._session.scalar(
+            select(func.count()).select_from(Vocab).where(*self._user_filter())
+        ) or 0
         mastered = await self._session.scalar(
-            select(func.count()).select_from(Vocab).where(Vocab.mastered == True)
+            select(func.count()).select_from(Vocab).where(*self._user_filter(), Vocab.mastered == True)
         ) or 0
         need_review = await self._session.scalar(
             select(func.count()).select_from(Vocab).where(
-                and_(Vocab.mastered == False, Vocab.review_count == 0)
+                *self._user_filter(), Vocab.mastered == False, Vocab.review_count == 0
             )
         ) or 0
         return {"total": total, "mastered": mastered, "needReview": need_review}
@@ -325,14 +351,14 @@ class VocabRepository:
 
         # 已掌握
         mastered_count = await self._session.scalar(
-            select(func.count()).select_from(Vocab).where(Vocab.mastered == True)
+            select(func.count()).select_from(Vocab).where(*self._user_filter(), Vocab.mastered == True)
         ) or 0
 
         # 需要复习的（未掌握且 review_count == 0 或超过间隔）
         due_words = []
         # 获取未掌握的词
         result = await self._session.execute(
-            select(Vocab).where(Vocab.mastered == False).limit(500)
+            select(Vocab).where(*self._user_filter(), Vocab.mastered == False).limit(500)
         )
         unmastered = result.scalars().all()
 
@@ -370,7 +396,9 @@ class VocabRepository:
         return {
             "due_today": len(due_words),
             "mastered": mastered_count,
-            "total": await self._session.scalar(select(func.count()).select_from(Vocab)) or 0,
+            "total": await self._session.scalar(
+                select(func.count()).select_from(Vocab).where(*self._user_filter())
+            ) or 0,
             "words": due_words,
             "intervals": ebbinghaus_intervals,
         }
@@ -381,15 +409,21 @@ class VocabRepository:
 # ════════════════════════════════════════════
 
 class StatsRepository:
-    """DailyStats / DailyWords / DailyAccuracy CRUD"""
+    """DailyStats / DailyWords / DailyAccuracy CRUD（按用户隔离）"""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, user_id=_UNSET):
         self._session = session
+        self._user_id = _resolve_user_id(user_id)
+
+    def _user_filter(self):
+        if self._user_id is None:
+            return [DailyStats.user_id.is_(None)]
+        return [DailyStats.user_id == self._user_id]
 
     async def get_daily_stats(self) -> List[Dict[str, Any]]:
-        """获取过去 14 天每日时长"""
+        """获取过去 14 天每日时长（按当前用户隔离）"""
         result = await self._session.execute(
-            select(DailyStats).order_by(DailyStats.date.desc()).limit(14)
+            select(DailyStats).where(*self._user_filter()).order_by(DailyStats.date.desc()).limit(14)
         )
         rows = result.scalars().all()
         return [{"date": r.date, "minutes": float(r.minutes)} for r in reversed(rows)]
@@ -397,20 +431,20 @@ class StatsRepository:
     async def upsert_daily_stats(self, date: str, minutes: float):
         """插入或更新每日时长"""
         existing = await self._session.execute(
-            select(DailyStats).where(DailyStats.date == date)
+            select(DailyStats).where(*self._user_filter(), DailyStats.date == date)
         )
         ds = existing.scalar_one_or_none()
         if ds:
             ds.minutes = minutes
         else:
-            ds = DailyStats(date=date, minutes=minutes)
+            ds = DailyStats(date=date, minutes=minutes, user_id=self._user_id)
             self._session.add(ds)
         await self._session.commit()
 
     async def get_daily_words(self) -> List[Dict[str, Any]]:
-        """获取过去 14 天每日词汇量"""
+        """获取过去 14 天每日词汇量（按当前用户隔离）"""
         result = await self._session.execute(
-            select(DailyWords).order_by(DailyWords.date.desc()).limit(14)
+            select(DailyWords).where(*self._user_filter()).order_by(DailyWords.date.desc()).limit(14)
         )
         rows = result.scalars().all()
         return [{"date": r.date, "new": r.new_words, "total": r.total_words} for r in reversed(rows)]
@@ -418,21 +452,21 @@ class StatsRepository:
     async def upsert_daily_words(self, date: str, new_words: int, total_words: int):
         """插入或更新每日词汇量"""
         existing = await self._session.execute(
-            select(DailyWords).where(DailyWords.date == date)
+            select(DailyWords).where(*self._user_filter(), DailyWords.date == date)
         )
         dw = existing.scalar_one_or_none()
         if dw:
             dw.new_words = new_words
             dw.total_words = total_words
         else:
-            dw = DailyWords(date=date, new_words=new_words, total_words=total_words)
+            dw = DailyWords(date=date, new_words=new_words, total_words=total_words, user_id=self._user_id)
             self._session.add(dw)
         await self._session.commit()
 
     async def get_daily_accuracy(self) -> List[Dict[str, Any]]:
-        """获取过去 14 天每日准确率"""
+        """获取过去 14 天每日准确率（按当前用户隔离）"""
         result = await self._session.execute(
-            select(DailyAccuracy).order_by(DailyAccuracy.date.desc()).limit(14)
+            select(DailyAccuracy).where(*self._user_filter()).order_by(DailyAccuracy.date.desc()).limit(14)
         )
         rows = result.scalars().all()
         return [{"date": r.date, "accuracy": float(r.accuracy)} for r in reversed(rows)]
@@ -440,13 +474,13 @@ class StatsRepository:
     async def upsert_daily_accuracy(self, date: str, accuracy: float):
         """插入或更新每日准确率"""
         existing = await self._session.execute(
-            select(DailyAccuracy).where(DailyAccuracy.date == date)
+            select(DailyAccuracy).where(*self._user_filter(), DailyAccuracy.date == date)
         )
         da = existing.scalar_one_or_none()
         if da:
             da.accuracy = accuracy
         else:
-            da = DailyAccuracy(date=date, accuracy=accuracy)
+            da = DailyAccuracy(date=date, accuracy=accuracy, user_id=self._user_id)
             self._session.add(da)
         await self._session.commit()
 
@@ -496,18 +530,24 @@ class ExerciseRepository:
 # ════════════════════════════════════════════
 
 class DailyGoalRepository:
-    """每日目标 CRUD"""
+    """每日目标 CRUD（按用户隔离）"""
 
     # 目标设定使用固定哨兵日期，与每日进度（真实日期）明确区分
     TARGET_DATE = "0000-00-00"
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, user_id=_UNSET):
         self._session = session
+        self._user_id = _resolve_user_id(user_id)
+
+    def _user_filter(self):
+        if self._user_id is None:
+            return [DailyGoal.user_id.is_(None)]
+        return [DailyGoal.user_id == self._user_id]
 
     async def get_target(self) -> Dict[str, int]:
-        """获取目标设定（专用哨兵行，不受每日进度影响）"""
+        """获取目标设定（专用哨兵行，按当前用户隔离）"""
         result = await self._session.execute(
-            select(DailyGoal).where(DailyGoal.date == self.TARGET_DATE)
+            select(DailyGoal).where(*self._user_filter(), DailyGoal.date == self.TARGET_DATE)
         )
         dg = result.scalar_one_or_none()
         if dg:
@@ -519,9 +559,9 @@ class DailyGoalRepository:
         return {"daily_pomodoros": 4, "daily_words": 20, "daily_minutes": 60}
 
     async def update_target(self, pomodoros: int, words: int, minutes: int):
-        """更新目标设定（upsert 哨兵行）"""
+        """更新目标设定（upsert 哨兵行，按当前用户隔离）"""
         result = await self._session.execute(
-            select(DailyGoal).where(DailyGoal.date == self.TARGET_DATE)
+            select(DailyGoal).where(*self._user_filter(), DailyGoal.date == self.TARGET_DATE)
         )
         dg = result.scalar_one_or_none()
         if dg:
@@ -532,21 +572,23 @@ class DailyGoalRepository:
             dg = DailyGoal(
                 date=self.TARGET_DATE,
                 pomodoros_target=pomodoros, words_target=words, minutes_target=minutes,
+                user_id=self._user_id,
             )
             self._session.add(dg)
         await self._session.commit()
 
     async def get_today_progress(self) -> Dict[str, Any]:
-        """获取今日进度"""
+        """获取今日进度（按当前用户隔离）"""
         today = datetime.now().strftime("%Y-%m-%d")
         result = await self._session.execute(
-            select(DailyGoal).where(DailyGoal.date == today)
+            select(DailyGoal).where(*self._user_filter(), DailyGoal.date == today)
         )
         dg = result.scalar_one_or_none()
         if not dg:
             # 创建今日记录
             dg = DailyGoal(
                 date=today, pomodoros_done=0, words_done=0, minutes_done=0,
+                user_id=self._user_id,
             )
             self._session.add(dg)
             await self._session.commit()
@@ -579,12 +621,13 @@ class DailyGoalRepository:
             vals["minutes_done"] = _sa_func.coalesce(DailyGoal.minutes_done, 0) + minutes
         if not vals:
             return
-        stmt = _sa_update(DailyGoal).where(DailyGoal.date == today).values(**vals)
+        stmt = _sa_update(DailyGoal).where(*self._user_filter(), DailyGoal.date == today).values(**vals)
         res = await self._session.execute(stmt)
         if res.rowcount == 0:
             self._session.add(DailyGoal(
                 date=today,
                 pomodoros_done=pomodoros, words_done=words, minutes_done=minutes,
+                user_id=self._user_id,
             ))
         await self._session.commit()
 
@@ -786,6 +829,10 @@ class UserRepository:
 
     async def get_by_username(self, username: str) -> Optional[User]:
         result = await self.s.execute(select(User).where(User.username == username))
+        return result.scalar_one_or_none()
+
+    async def get_by_id(self, user_id: int) -> Optional[User]:
+        result = await self.s.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
 
     async def get_by_email(self, email: str) -> Optional[User]:

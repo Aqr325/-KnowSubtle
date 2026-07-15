@@ -52,6 +52,7 @@ from learning_agent_system.actions.knowledge_graph_generator import KnowledgeGra
 from learning_agent_system.memory.longterm_memory import LongTermMemory
 from learning_agent_system.memory.role_zero_memory import RoleZeroMemory
 from learning_agent_system.configs.system_config import SystemConfig
+from learning_agent_system.database.request_scope import current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -533,6 +534,7 @@ class TeamOrchestrator:
 
         try:
             factory = self._db_session_factory()
+            uid = current_user_id.get()
             with factory() as s:
                 existing = s.execute(
                     select(SessionModel).where(SessionModel.session_id == sid)
@@ -542,6 +544,7 @@ class TeamOrchestrator:
                     existing.metadata_json = data
                     existing.current_phase = phase
                     existing.updated_at = now
+                    existing.user_id = uid
                 else:
                     s.add(SessionModel(
                         session_id=sid,
@@ -549,6 +552,7 @@ class TeamOrchestrator:
                         metadata_json=data,
                         created_at=now,
                         updated_at=now,
+                        user_id=uid,
                     ))
                 s.commit()
         except Exception as e:
@@ -571,7 +575,10 @@ class TeamOrchestrator:
             factory = self._db_session_factory()
             with factory() as s:
                 rec = s.execute(
-                    select(SessionModel).where(SessionModel.session_id == session_id)
+                    select(SessionModel).where(
+                        SessionModel.session_id == session_id,
+                        SessionModel.user_id == current_user_id.get(),
+                    )
                 ).scalar_one_or_none()
             if not rec or not rec.metadata_json:
                 logger.warning(f"Session not found in DB: {session_id}")
@@ -590,7 +597,9 @@ class TeamOrchestrator:
         try:
             factory = self._db_session_factory()
             with factory() as s:
-                rows = s.execute(select(SessionModel.session_id)).scalars().all()
+                rows = s.execute(
+                    select(SessionModel.session_id).where(SessionModel.user_id == current_user_id.get())
+                ).scalars().all()
             return list(rows)
         except Exception as e:
             logger.error(f"Failed to list sessions: {e}")
