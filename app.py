@@ -127,6 +127,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:8000", "http://localhost:8001", "http://localhost:8002",
         "http://127.0.0.1:8000", "http://127.0.0.1:8001", "http://127.0.0.1:8002",
+        "http://localhost:8753", "http://127.0.0.1:8753",
     ],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -263,12 +264,23 @@ STORAGE_DIR = _resolve_data_dir()
 
 
 def load_app_config() -> dict:
-    """加载 Config/config.json；缺失时写入默认配置。"""
-    cfg = {"app_name": "KnowSubtle Learning Universe", "port": 8000, "host": "127.0.0.1"}
+    """加载 Config/config.json；缺失时写入默认配置。
+
+    端口迁移（2026-07-15）：旧版默认 8000 易与系统中其他程序冲突导致黑屏，
+    统一迁移到不常用的 8753；若用户已在 config.json 显式设了非 8000 端口则保留。
+    """
+    cfg = {"app_name": "KnowSubtle Learning Universe", "port": 8753, "host": "127.0.0.1"}
     cfg_path = CONFIG_DIR / "config.json"
     if cfg_path.exists():
         try:
             cfg.update(json.loads(cfg_path.read_text(encoding="utf-8")))
+            # 端口迁移：旧默认 8000 -> 8753（避免冲突）；其余端口原样保留
+            if int(cfg.get("port", 8753)) == 8000:
+                cfg["port"] = 8753
+                try:
+                    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"加载 config.json 失败，使用默认配置: {e}")
     else:
