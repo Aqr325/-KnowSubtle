@@ -340,15 +340,25 @@ def _open_pyqt_window(port: int) -> str:
         QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     except Exception:
         pass
-    # 渲染模式：【默认流畅优先】开启 GPU 合成 + GPU 光栅，规避滚动卡顿
-    # （背景见上轮：dd1cfdc2 的 --disable-gpu-compositing 致上下滚动极卡，已改为 GPU 合成）
-    _chromium_flags = (
-        "--enable-gpu-rasterization --enable-gpu-compositing "
-        "--disable-features=VizDisplayCompositor"
-    )
+    # 渲染模式（权衡：流畅 vs 不闪）：
+    #  - 默认「GPU 光栅 + CPU 合成」：光栅走 GPU（滚动流畅），最终合成放 CPU（规避 Intel 集显
+    #    GPU 合成层的闪屏）。注意：dd1cfdc2 曾用纯 "--disable-gpu-compositing"（连光栅也走 CPU）
+    #    才导致极卡；本默认保留 --enable-gpu-rasterization，故流畅且不闪。
+    #  - KS_GPU_COMPOSITING=1：全 GPU（光栅+合成均 GPU），最流畅但个别集显会闪，按需开启。
+    #  - KS_SOFTWARE_RENDER=1 ：全软件渲染，最稳但最卡，仍闪时的兜底。
     if os.environ.get("KS_SOFTWARE_RENDER"):
         _chromium_flags = (
             "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
+            "--disable-features=VizDisplayCompositor"
+        )
+    elif os.environ.get("KS_GPU_COMPOSITING"):
+        _chromium_flags = (
+            "--enable-gpu-rasterization --enable-gpu-compositing "
+            "--disable-features=VizDisplayCompositor"
+        )
+    else:
+        _chromium_flags = (
+            "--enable-gpu-rasterization --disable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags

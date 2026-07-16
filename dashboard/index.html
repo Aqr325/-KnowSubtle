@@ -2940,9 +2940,11 @@
       var acc = st.avgAccuracy;
       if (acc != null) $('#statAccuracy').textContent = Math.round(acc) + '%';
       animateNum($('#statStreak'), st.streak || 0);
-      $('#navTime').textContent = st.totalMinutes || 0;
-      $('#navWords').textContent = st.totalWords || 0;
-      $('#navStreak').textContent = st.streak || 0;
+      // 导航栏统计元素（#navTime/#navWords/#navStreak）在部分布局中已被移除，
+      // 加空值保护避免 $() 返回 null 时 .textContent 抛 TypeError 被 .catch 误报“加载失败”
+      var navTime = $('#navTime'); if (navTime) navTime.textContent = st.totalMinutes || 0;
+      var navWords = $('#navWords'); if (navWords) navWords.textContent = st.totalWords || 0;
+      var navStreak = $('#navStreak'); if (navStreak) navStreak.textContent = st.streak || 0;
     }).catch(function() { toast('加载统计数据失败', 'error'); });
   }
 
