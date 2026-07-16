@@ -2373,6 +2373,13 @@
 }
 .auth-dropdown a.danger { color: var(--red); }
 .auth-dropdown a.danger:hover { background: rgba(239,68,68,0.1); }
+/* 滚动条美化：深色细滚动条，与仪表盘主题统一 */
+* { scrollbar-width: thin; scrollbar-color: #3A3550 #1A1722; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #16131F; }
+::-webkit-scrollbar-thumb { background: #3A3550; border-radius: 6px; border: 2px solid #16131F; }
+::-webkit-scrollbar-thumb:hover { background: #4F8CFF; }
+::-webkit-scrollbar-corner { background: #16131F; }
 </style>
 </head>
 <body>
@@ -4861,6 +4868,22 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
   </div>
 </div>
+
+<!-- 断线重连提示（轻量，独立于业务 JS） -->
+<div id="connToast" style="position:fixed;left:50%;top:18px;transform:translateX(-50%);z-index:99999;display:none;padding:10px 18px;border-radius:10px;background:rgba(239,68,68,0.95);color:#fff;font:13px/1.4 'Microsoft YaHei',sans-serif;box-shadow:0 6px 20px rgba(0,0,0,0.4);">服务连接中断，正在尝试重连…</div>
+<script>
+(function(){
+  var toast = document.getElementById('connToast');
+  var connected = true;
+  function ping(){
+    fetch('/api/health', {cache:'no-store'}).then(function(r){ return r.ok ? r.json() : Promise.reject(); })
+      .then(function(){ if(!connected){ connected=true; toast.style.display='none'; } })
+      .catch(function(){ if(connected){ connected=false; toast.style.display='block'; } });
+  }
+  setInterval(ping, 5000);
+  ping();
+})();
+</script>
 
 </body>
 </html>

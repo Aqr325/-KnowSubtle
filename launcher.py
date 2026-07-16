@@ -234,36 +234,49 @@ def _webview2_available() -> bool:
 
 
 def _start_server(app, host: str, port: int):
-    """在独立线程中运行 uvicorn；stop_event 置位时优雅退出。"""
+    """在独立线程中运行 uvicorn；stop_event 置位时优雅退出。
+
+    增强健壮性：若 uvicorn 因异常退出（而非用户主动停止 stop_event 置位），
+    则等待 3 秒后自动重建并重启，避免单次崩溃导致整个应用不可用。
+    用户通过托盘退出时 stop_event 置位，循环正常 break，不重启。
+    """
     import uvicorn
     import traceback
 
     global _server_error
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
-    server = uvicorn.Server(config)
+    _consecutive_failures = 0
 
-    def _watch_stop():
-        while not stop_event.is_set():
-            time.sleep(0.5)
-        server.should_exit = True
+    while not stop_event.is_set():
+        config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+        server = uvicorn.Server(config)
 
-    threading.Thread(target=_watch_stop, daemon=True).start()
-    try:
-        server.run()
-    except Exception as e:  # 服务线程异常：记录并暴露给 main，避免静默死亡导致连接被拒
-        _server_error = f"{type(e).__name__}: {e}"
-        _log(f"服务线程异常: {_server_error}")
-        traceback.print_exc()
-        _write_diagnose("服务线程异常", _server_error)
-    # 兜底：线程结束但端口未真正监听（uvicorn 内部 startup 失败可能静默退出且不抛异常，
-    # 典型为数据库/迁移错误）。此时若非用户主动退出，则记录诊断，避免任何失败路径漏诊。
-    try:
-        if not stop_event.is_set() and not _probe_url(f"http://{host}:{port}/"):
-            if _server_error is None:
-                _server_error = "(uvicorn 启动失败但未抛出异常，多为数据库/迁移错误)"
-            _write_diagnose("服务线程结束但未监听", _server_error)
-    except Exception:
-        pass
+        def _watch_stop(srv):
+            while not stop_event.is_set():
+                time.sleep(0.5)
+            srv.should_exit = True
+
+        threading.Thread(target=_watch_stop, args=(server,), daemon=True).start()
+        try:
+            server.run()
+        except Exception as e:  # 服务线程异常：记录并暴露给 main，避免静默死亡导致连接被拒
+            _server_error = f"{type(e).__name__}: {e}"
+            _log(f"服务线程异常: {_server_error}")
+            traceback.print_exc()
+            _write_diagnose("服务线程异常", _server_error)
+        # server.run() 返回
+        if stop_event.is_set():
+            break
+        # 非主动停止 → 视为崩溃，自动重启
+        _consecutive_failures += 1
+        _log(f"检测到服务异常退出（第 {_consecutive_failures} 次），3 秒后自动重启…")
+        _write_diagnose(
+            "服务异常退出自动重启",
+            f"uvicorn 退出但未收到停止指令（连续第 {_consecutive_failures} 次），将自动重启。",
+        )
+        try:
+            time.sleep(3)
+        except Exception:
+            pass
 
 
 def _resolve_app_icon():
@@ -290,14 +303,15 @@ def _resolve_app_icon():
 def _open_pyqt_window(port: int) -> str:
     """用 PyQt6 原生桌面窗口（内嵌 Chromium/QWebEngine）承载仪表盘。
 
-    这是一个【真正的桌面程序窗口】（系统标题栏、任务栏、可最小化/最大化/关闭），
-    不再打开浏览器。Chromium 由 PyQt6 自带、不依赖系统 WebView2，
-    规避此前 WebView2 黑屏问题。
-
-    返回：
-      - "pyqt"             : 窗口正常打开并由用户关闭（进程随之退出）
-      - "failed"           : 服务启动超时，未能打开界面
-      - "pyqt-unavailable" : PyQt6 不可用，调用方应回退到浏览器
+    真正的桌面程序（系统任务栏、可最小化/最大化/关闭），不再打开浏览器。
+    内置增强：
+      - 自定义深色标题栏（可拖拽 / 双击最大化 / 最小化·最大化·关闭按钮），与仪表盘主题统一；
+        说明：刻意不用真·毛玻璃（WA_TranslucentBackground + DWM blur），因其可能复现 Intel 集显闪屏，
+        防闪优先，故标题栏用纯深色填充。
+      - 系统托盘常驻：关闭/最小化默认缩到托盘防误关，双击托盘图标恢复；
+        托盘不可用时回退为正常任务栏最小化 + 关闭退出（KS_QUIT_ON_CLOSE=1 强制真正退出）。
+      - 启动 splash + 加载进度：页面加载期间覆盖层显示百分比，避免深色背景被误认为卡死。
+      - 窗口位置/大小记忆：QSettings 持久化，下次启动自动还原。
     """
     url = f"http://127.0.0.1:{port}/"
     if not _is_server_up(url):
@@ -306,10 +320,13 @@ def _open_pyqt_window(port: int) -> str:
         return "failed"
 
     try:
-        from PyQt6.QtWidgets import QApplication, QMainWindow
+        from PyQt6.QtWidgets import (
+            QApplication, QMainWindow, QWidget, QLabel, QHBoxLayout,
+            QVBoxLayout, QPushButton, QSystemTrayIcon, QMenu,
+        )
         from PyQt6.QtWebEngineWidgets import QWebEngineView
-        from PyQt6.QtCore import QUrl, Qt
-        from PyQt6.QtGui import QIcon, QColor
+        from PyQt6.QtCore import QUrl, Qt, QSettings, QEvent, QTimer, QPoint
+        from PyQt6.QtGui import QIcon, QColor, QAction
     except Exception as e:
         _log(f"PyQt6 不可用，回退到浏览器: {type(e).__name__}: {e}")
         return "pyqt-unavailable"
@@ -317,21 +334,14 @@ def _open_pyqt_window(port: int) -> str:
     # 关闭 QtWebEngine 子进程沙箱：规避部分受限/权限环境下的启动失败
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
 
-    # ===== 防闪屏加固（针对 Intel 集显 + WebEngine GPU 加速偶发闪烁）=====
-    # 1) 共享 OpenGL 上下文：避免 WebEngine 独立上下文在窗口内反复重建导致闪烁
+    # ===== 防闪屏加固（同上轮，未动）=====
     try:
         from PyQt6.QtCore import QCoreApplication
         QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     except Exception:
         pass
-    # 2) 渲染模式：【默认流畅优先】开启 GPU 合成 + GPU 光栅，规避滚动卡顿
-    #    背景：上一轮（dd1cfdc2）为防闪用了 "--disable-gpu-compositing"，把整页合成退回 CPU，
-    #    导致上下滚动极卡（每帧都要 CPU 重新合成整张位图）。现默认改为：
-    #      --enable-gpu-rasterization --enable-gpu-compositing : 光栅与显示合成均走 GPU（滚动流畅）
-    #      --disable-features=VizDisplayCompositor            : 禁用 Viz 显示合成器，
-    #         规避 Intel 集显最常见的闪屏源；禁用后回退到旧 cc 合成器，仍走 GPU，故流畅且相对稳定。
-    #    另配合 Qt 层防闪（深色背景 / 不透明合成 WA_OpaquePaintEvent / 共享 GL 上下文），进一步抑制闪烁。
-    #    权衡：个别机器若默认仍闪，设 KS_SOFTWARE_RENDER=1 退回全软件渲染（最稳但卡，无需重打包）。
+    # 渲染模式：【默认流畅优先】开启 GPU 合成 + GPU 光栅，规避滚动卡顿
+    # （背景见上轮：dd1cfdc2 的 --disable-gpu-compositing 致上下滚动极卡，已改为 GPU 合成）
     _chromium_flags = (
         "--enable-gpu-rasterization --enable-gpu-compositing "
         "--disable-features=VizDisplayCompositor"
@@ -343,36 +353,181 @@ def _open_pyqt_window(port: int) -> str:
         )
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags
 
+    _UI_BG = "#120F17"
+    _UI_BAR = "#1A1722"
+    _settings = QSettings("KnowSubtle", "Launcher")
+
+    class _TitleBar(QWidget):
+        def __init__(self, window):
+            super().__init__(window)
+            self._window = window
+            self._drag_pos = None
+            self.setFixedHeight(38)
+            self.setStyleSheet(f"background:{_UI_BAR};")
+            layout = QHBoxLayout(self)
+            layout.setContentsMargins(12, 0, 8, 0)
+            layout.setSpacing(4)
+            title = QLabel("KnowSubtle 学习宇宙")
+            title.setStyleSheet("color:#E6E6F0; font:600 13px 'Microsoft YaHei';")
+            layout.addWidget(title)
+            layout.addStretch(1)
+            self._min = QPushButton("—")
+            self._max = QPushButton("▢")
+            self._close = QPushButton("✕")
+            self._min.setFixedSize(34, 26)
+            self._max.setFixedSize(34, 26)
+            self._close.setFixedSize(34, 26)
+            btn_style = (
+                f"QPushButton{{background:{_UI_BAR};color:#C8C8D4;border:none;font-size:14px;}}"
+                f"QPushButton:hover{{background:#2A2636;}}"
+            )
+            for b in (self._min, self._max, self._close):
+                b.setStyleSheet(btn_style)
+            self._min.clicked.connect(self._on_min)
+            self._max.clicked.connect(self._on_max)
+            self._close.clicked.connect(self._window.close)
+            layout.addWidget(self._min)
+            layout.addWidget(self._max)
+            layout.addWidget(self._close)
+
+        def _on_min(self):
+            if self._window._tray_ok:
+                self._window.hide()
+            else:
+                self._window.showMinimized()
+
+        def _on_max(self):
+            if self._window.isMaximized():
+                self._window.showNormal()
+            else:
+                self._window.showMaximized()
+
+        def mousePressEvent(self, ev):
+            if ev.button() == Qt.MouseButton.LeftButton:
+                self._drag_pos = ev.globalPosition().toPoint()
+            super().mousePressEvent(ev)
+
+        def mouseMoveEvent(self, ev):
+            if self._drag_pos is not None and (ev.buttons() & Qt.MouseButton.LeftButton):
+                delta = ev.globalPosition().toPoint() - self._drag_pos
+                self._window.move(self._window.pos() + delta)
+                self._drag_pos = ev.globalPosition().toPoint()
+            super().mouseMoveEvent(ev)
+
+        def mouseReleaseEvent(self, ev):
+            self._drag_pos = None
+            super().mouseReleaseEvent(ev)
+
+        def mouseDoubleClickEvent(self, ev):
+            self._on_max()
+
     class _DesktopWindow(QMainWindow):
         def __init__(self):
             super().__init__()
+            self._tray_ok = False
+            self._tray = None
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
             self.setWindowTitle("KnowSubtle 学习宇宙")
-            self.resize(1280, 800)
+            geo = _settings.value("geometry")
+            if geo is not None:
+                try:
+                    self.restoreGeometry(geo)
+                except Exception:
+                    self.resize(1280, 800)
+            else:
+                self.resize(1280, 800)
             self.setMinimumSize(1024, 680)
+
+            container = QWidget()
+            container.setStyleSheet(f"background:{_UI_BG};")
+            root = QVBoxLayout(container)
+            root.setContentsMargins(0, 0, 0, 0)
+            root.setSpacing(0)
+            self._title_bar = _TitleBar(self)
+            root.addWidget(self._title_bar)
+
             self._view = QWebEngineView()
-            # 消除加载白闪：在 C++ 层与样式层均把背景设为仪表盘深色，
-            # 页面尚未注入内容时窗口就是深色，不再闪一下白屏
             try:
                 self._view.page().setBackgroundColor(QColor(0x12, 0x0F, 0x17))
             except Exception:
                 pass
-            self._view.setStyleSheet("background-color:#120F17;")
-            # 关闭透明背景与半透明合成，避免 Windows DWM 合成导致的窗口闪烁
+            self._view.setStyleSheet(f"background-color:{_UI_BG};")
             self._view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
             self._view.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
-            self.setCentralWidget(self._view)
-            self._view.load(QUrl(url))
+            root.addWidget(self._view, 1)
+            self.setCentralWidget(container)
+
+            # 启动 splash / 加载进度（覆盖整窗，加载完成后淡出）
+            self._splash = QLabel(self)
+            self._splash.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._splash.setStyleSheet(
+                f"background:{_UI_BG}; color:#9AA0B5; font:14px 'Microsoft YaHei';"
+            )
+            self._splash.setText("正在加载仪表盘 … 0%")
+            self._splash.resize(self.size())
+            self._splash.show()
+            self._view.loadProgress.connect(self._on_progress)
+            self._view.loadFinished.connect(self._on_loaded)
+
             _ico = _resolve_app_icon()
             if _ico:
                 try:
                     self.setWindowIcon(QIcon(str(_ico)))
                 except Exception:
                     pass
+            self._view.load(QUrl(url))
+
+        def _on_progress(self, p):
+            try:
+                self._splash.setText(f"正在加载仪表盘 … {p}%")
+            except Exception:
+                pass
+
+        def _on_loaded(self, ok):
+            try:
+                if ok:
+                    QTimer.singleShot(300, self._splash.hide)
+                else:
+                    self._splash.setText("加载失败，请检查本地服务是否运行。")
+            except Exception:
+                pass
+
+        def resizeEvent(self, ev):
+            try:
+                self._splash.resize(self.size())
+            except Exception:
+                pass
+            super().resizeEvent(ev)
+
+        def changeEvent(self, ev):
+            # 系统最小化（如 Win+M）→ 有托盘时缩到托盘
+            if ev.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+                if self._tray_ok:
+                    self.hide()
+            super().changeEvent(ev)
 
         def closeEvent(self, event):
-            # 关闭窗口即退出应用：触发服务线程优雅退出
-            stop_event.set()
-            event.accept()
+            # 保存窗口状态
+            try:
+                _settings.setValue("geometry", self.saveGeometry())
+            except Exception:
+                pass
+            # 默认：关闭=缩到托盘防误关；KS_QUIT_ON_CLOSE=1 或托盘不可用时真正退出
+            _force_quit = os.environ.get("KS_QUIT_ON_CLOSE", "").strip().lower() in ("1", "true", "yes")
+            if _force_quit or not self._tray_ok:
+                stop_event.set()
+                event.accept()
+            else:
+                event.ignore()
+                self.hide()
+                try:
+                    if self._tray is not None:
+                        self._tray.showMessage(
+                            "KnowSubtle", "已最小化到系统托盘，点击托盘图标可恢复。",
+                            QSystemTrayIcon.MessageIcon.Information, 2000,
+                        )
+                except Exception:
+                    pass
 
     try:
         _log("正在打开原生桌面窗口 (PyQt6 + QWebEngine) ...")
@@ -383,6 +538,50 @@ def _open_pyqt_window(port: int) -> str:
         return "pyqt-unavailable"
 
     win = _DesktopWindow()
+
+    # 系统托盘
+    try:
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            tray = QSystemTrayIcon(app)
+            _ico = _resolve_app_icon()
+            if _ico:
+                try:
+                    tray.setIcon(QIcon(str(_ico)))
+                except Exception:
+                    tray.setIcon(app.windowIcon())
+            else:
+                tray.setIcon(app.windowIcon())
+            tray.setToolTip("KnowSubtle 学习宇宙")
+            menu = QMenu()
+            act_show = QAction("显示窗口", app)
+            act_quit = QAction("退出应用", app)
+            menu.addAction(act_show)
+            menu.addAction(act_quit)
+            tray.setContextMenu(menu)
+
+            def _restore():
+                win.showNormal()
+                win.activateWindow()
+
+            def _quit():
+                stop_event.set()
+                app.quit()
+
+            act_show.triggered.connect(_restore)
+            act_quit.triggered.connect(_quit)
+            tray.activated.connect(
+                lambda reason: _restore()
+                if reason in (QSystemTrayIcon.ActivationReason.DoubleClick,
+                              QSystemTrayIcon.ActivationReason.Trigger)
+                else None
+            )
+            tray.show()
+            win._tray = tray
+            win._tray_ok = True
+    except Exception as e:
+        _log(f"系统托盘初始化失败（不影响主窗口）: {type(e).__name__}: {e}")
+        win._tray_ok = False
+
     win.show()
     app.exec()
     return "pyqt"
