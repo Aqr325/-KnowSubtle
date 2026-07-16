@@ -3,8 +3,10 @@
 职责：
 1. 设置 metagpt / LLM 运行环境变量（兼容 local_metagpt stub 打桩）
 2. 启动 FastAPI 本地服务（uvicorn），并做端口冲突 / 单实例 / 就绪检测
-3. 默认用系统默认【浏览器】打开仪表盘（最可靠入口，无黑屏）；
-   原生 WebView 窗口仅作 opt-in（设置 KS_FORCE_WEBVIEW=1），因本机多次黑屏无法渲染
+3. 默认用【PyQt6 原生桌面窗口】（内嵌自带的 Chromium/QWebEngine）承载仪表盘，
+   这是一个真正的桌面程序（系统标题栏、任务栏、可最小化/最大化/关闭），不再打开浏览器；
+   PyQt6 自带内核、不依赖系统 WebView2，规避此前 WebView2 黑屏问题。
+   仅当 PyQt6 不可用、或设置 KS_FORCE_BROWSER=1 时回退到浏览器 / opt-in 原生 WebView。
 
 关键设计（2026-07-15 修复黑屏后 "无法访问"）：
 - 服务运行在【独立受控线程】，进程生消亡不再绑定 WebView 窗口。
@@ -264,14 +266,38 @@ def _start_server(app, host: str, port: int):
         pass
 
 
-def _open_native_window(port: int) -> str:
-    """打开仪表盘窗口。
+def _resolve_app_icon():
+    """从可执行文件目录向上查找程序图标（与 app.py 的 _find_up 思路一致）。"""
+    try:
+        base = Path(sys.executable).parent
+        for _ in range(6):
+            cand = base / "程序图标.ico"
+            if cand.exists():
+                return cand
+            for sub in ("Resources", "Resources/html", "Install"):
+                c2 = base / sub / "程序图标.ico"
+                if c2.exists():
+                    return c2
+            parent = base.parent
+            if parent == base:
+                break
+            base = parent
+    except Exception:
+        pass
+    return None
 
-    返回值（供 main 决定如何保活进程）：
-      - "webview"        : WebView2 窗口正常打开并由用户关闭（主线程无需保活，直接退出）
-      - "black-fallback" : 黑屏看门狗已打开浏览器并销毁黑窗（需控制窗口保活）
-      - "browser"        : 无 WebView2 / 强制浏览器，已打开默认浏览器（需控制窗口保活）
-      - "failed"         : 服务启动超时，未能打开任何界面（直接退出）
+
+def _open_pyqt_window(port: int) -> str:
+    """用 PyQt6 原生桌面窗口（内嵌 Chromium/QWebEngine）承载仪表盘。
+
+    这是一个【真正的桌面程序窗口】（系统标题栏、任务栏、可最小化/最大化/关闭），
+    不再打开浏览器。Chromium 由 PyQt6 自带、不依赖系统 WebView2，
+    规避此前 WebView2 黑屏问题。
+
+    返回：
+      - "pyqt"             : 窗口正常打开并由用户关闭（进程随之退出）
+      - "failed"           : 服务启动超时，未能打开界面
+      - "pyqt-unavailable" : PyQt6 不可用，调用方应回退到浏览器
     """
     url = f"http://127.0.0.1:{port}/"
     if not _is_server_up(url):
@@ -279,11 +305,67 @@ def _open_native_window(port: int) -> str:
         _write_diagnose("服务启动超时", f"url={url}, error={_server_error}")
         return "failed"
 
-    # 默认浏览器模式：本机原生 WebView 多次黑屏、无法可靠渲染，浏览器才是最稳的入口。
-    # 仅当用户显式设置 KS_FORCE_WEBVIEW=1 时才尝试原生窗口（保留作调试路径）。
+    try:
+        from PyQt6.QtWidgets import QApplication, QMainWindow
+        from PyQt6.QtWebEngineWidgets import QWebEngineView
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QIcon
+    except Exception as e:
+        _log(f"PyQt6 不可用，回退到浏览器: {type(e).__name__}: {e}")
+        return "pyqt-unavailable"
+
+    # 关闭 QtWebEngine 子进程沙箱：规避部分受限/权限环境下的启动失败
+    os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+
+    class _DesktopWindow(QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle("KnowSubtle 学习宇宙")
+            self.resize(1280, 800)
+            self.setMinimumSize(1024, 680)
+            self._view = QWebEngineView()
+            self.setCentralWidget(self._view)
+            self._view.load(QUrl(url))
+            _ico = _resolve_app_icon()
+            if _ico:
+                try:
+                    self.setWindowIcon(QIcon(str(_ico)))
+                except Exception:
+                    pass
+
+        def closeEvent(self, event):
+            # 关闭窗口即退出应用：触发服务线程优雅退出
+            stop_event.set()
+            event.accept()
+
+    try:
+        _log("正在打开原生桌面窗口 (PyQt6 + QWebEngine) ...")
+        _write_diagnose("启动成功(桌面窗口)", f"url={url}")
+        app = QApplication(sys.argv)
+    except Exception as e:
+        _log(f"QApplication 初始化失败，回退到浏览器: {type(e).__name__}: {e}")
+        return "pyqt-unavailable"
+
+    win = _DesktopWindow()
+    win.show()
+    app.exec()
+    return "pyqt"
+
+
+def _open_fallback_window(port: int) -> str:
+    """回退路径：默认浏览器 / opt-in 原生 WebView（KS_FORCE_WEBVIEW=1）。
+
+    仅当 PyQt6 不可用、或用户强制 KS_FORCE_BROWSER=1 时走这里。
+    """
+    url = f"http://127.0.0.1:{port}/"
+    if not _is_server_up(url):
+        _write_diagnose("服务启动超时", f"url={url}, error={_server_error}")
+        return "failed"
+
+    # 默认浏览器模式：PyQt 不可用时的兜底入口
     if not os.environ.get("KS_FORCE_WEBVIEW"):
-        _log("默认使用浏览器打开仪表盘（原生 WebView 在本机不稳定，统一走浏览器）。")
-        _write_diagnose("启动成功(浏览器模式)", f"url={url}")
+        _log("回退：使用默认浏览器打开仪表盘（PyQt 不可用或被 KS_FORCE_BROWSER 强制）。")
+        _write_diagnose("启动成功(浏览器回退)", f"url={url}")
         try:
             webbrowser.open(url)
         except Exception:
@@ -348,6 +430,26 @@ def _open_native_window(port: int) -> str:
         except Exception:
             pass
         return "browser"
+
+
+def _open_native_window(port: int) -> str:
+    """总入口：优先 PyQt6 桌面窗口；不可用时回退浏览器 / 原生 WebView。
+
+    返回值（供 main 决定如何保活进程）：
+      - "pyqt"             : PyQt 窗口正常打开并由用户关闭（直接退出）
+      - "browser"          : 回退浏览器（需控制窗口保活）
+      - "black-fallback"   : WebView 黑屏看门狗已回退浏览器（需控制窗口保活）
+      - "failed"           : 服务启动超时，未能打开任何界面（直接退出并报错）
+    """
+    if os.environ.get("KS_FORCE_BROWSER"):
+        return _open_fallback_window(port)
+    r = _open_pyqt_window(port)
+    if r == "pyqt":
+        return "pyqt"
+    if r == "failed":
+        return "failed"
+    # pyqt-unavailable → 回退
+    return _open_fallback_window(port)
 
 
 def _run_control_window(url: str):

@@ -4,7 +4,12 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
+# Build (忽略日志/产物/缓存，保留构建源码脚本与 spec)
+build/__pycache__/
+build/**/*.log
+build/*.zip
+build/main/
+build/work/
 dist/
 *.egg-info/
 *.egg
@@ -50,3 +55,7 @@ _logs/
 
 # Misc
 nul
+
+# 保留构建配置（含 PyQt6 打包修正，防止未来 rebuild 因 --collect-submodules=PyQt6 再次 OOM 被杀）
+!build/KnowSubtle.spec
+!build/main.spec

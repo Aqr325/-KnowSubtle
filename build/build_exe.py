@@ -1,0 +1,87 @@
+"""在 Windows 上把项目打包为 Release-Package/Core/KnowSubtle/KnowSubtle.exe（PyInstaller 单文件夹 onedir）。
+
+前置条件（在本机 Windows 执行）：
+    pip install pyinstaller
+    pip install fastapi uvicorn pydantic pydantic-settings rich "httpx>=0.24,<0.28" openai==1.6.1 pywebview
+
+用法：
+    cd learning-agent-system
+    python build/build_exe.py
+
+产物：Release-Package/Core/KnowSubtle/KnowSubtle.exe 及其依赖（Core/main/_internal、*.dll）。
+随后把 Release-Package 整体交给 NSIS 安装脚本（Release-Package/Install/install.nsi）制成安装包。
+
+注意（已验证可独立运行的关键参数）：
+  * --exclude-module metagpt   : 项目用 local_metagpt stub 打桩，不收集真实 metagpt，避免体积膨胀与缺失依赖。
+  * --add-data local_metagpt   : stub 包作为数据文件打入 _internal，运行时由 app.py 注入 sys.path。
+  * --collect-submodules       : 确保 learning_agent_system 所有子模块都被收集（否则运行时 import 失败）。
+  * --noupx                    : 关闭 UPX 压缩，规避部分环境下 UPX 导致的启动崩溃。
+  * --clean -y                 : 清理旧产物并覆盖输出目录，避免 COLLECT 阶段 "output directory not empty"。
+
+HTML 资源（dashboard/）不在此处打进 Core，而是由 NSIS 以同级 Release-Package/Resources/html
+形式分发；app.py 在打包态用 `_find_up` 从可执行文件目录逐级向上查找 `Resources/html`
+（即 Core/KnowSubtle/KnowSubtle.exe → 向上到 Release-Package/Resources/html，布局无关）。
+"""
+import PyInstaller.__main__
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent          # learning-agent-system/
+DIST = ROOT / "Release-Package" / "Core"
+ICO = ROOT / "Release-Package" / "Install" / "程序图标.ico"
+
+args = [
+    str(ROOT / "launcher.py"),
+    "--name=KnowSubtle",
+    "--onedir",
+    "--windowed",
+    f"--icon={ICO}",
+    f"--distpath={DIST}",
+    f"--workpath={ROOT / 'build' / 'work'}",
+    f"--specpath={ROOT / 'build'}",
+    "--clean",
+    "-y",
+    # 关键：用 local_metagpt stub 替代真实 metagpt，绝不收集真实 metagpt
+    "--exclude-module=metagpt",
+    # stub 包作为数据打入 _internal（运行时由 app.py 注入 sys.path）
+    f"--add-data={ROOT / 'local_metagpt'};local_metagpt",
+    # 确保业务包全部子模块被收集（等价于手动构建命令的 --collect-submodules）
+    "--collect-submodules=learning_agent_system",
+    # 隐藏导入（PyInstaller 静态分析可能漏掉的运行时导入）
+    "--hidden-import=local_metagpt.stub",
+    "--hidden-import=learning_agent_system.orchestrator",
+    "--hidden-import=learning_agent_system.schema",
+    # 数据库层：SQLAlchemy + aiosqlite（dialect 为动态导入，需显式声明）
+    "--hidden-import=sqlalchemy",
+    "--hidden-import=sqlalchemy.dialects.sqlite.aiosqlite",
+    "--hidden-import=aiosqlite",
+    # pywebview：原生桌面窗口（import 名为 webview；bottle 为其可选依赖，一并收集避免运行期缺失）
+    "--hidden-import=webview",
+    "--hidden-import=bottle",
+    "--collect-submodules=webview",
+    # PyQt6 桌面窗口（自带 Chromium，不依赖系统 WebView2）：承载仪表盘的真正桌面程序
+    "--hidden-import=PyQt6",
+    "--hidden-import=PyQt6.sip",
+    "--hidden-import=PyQt6.QtCore",
+    "--hidden-import=PyQt6.QtWidgets",
+    "--hidden-import=PyQt6.QtGui",
+    "--hidden-import=PyQt6.QtWebEngineWidgets",
+    "--hidden-import=PyQt6.QtWebEngineCore",
+    "--hidden-import=PyQt6.QtWebChannel",
+    "--hidden-import=PyQt6.QtNetwork",
+    "--hidden-import=PyQt6.QtPrintSupport",
+    # 注意：不要 --collect-submodules=PyQt6 / --collect-data=PyQt6！
+    # PyQt6 自带 PyInstaller hook 已会自动收集 QtWebEngine 二进制与资源
+    # (QtWebEngineProcess.exe / icudtl.dat / qtwebengine_resources.pak / locales)，
+    # 全量递归收集会导致 analysis 阶段 OOM 被杀。显式 hidden-import 即可。
+    # Phase 1 新增依赖：httpx（服务端 Key 代理转发）、yaml（llm_config.yaml 持久化）、rich（日志着色）
+    "--hidden-import=httpx",
+    "--hidden-import=yaml",
+    "--hidden-import=rich",
+    # 关闭 UPX，规避启动崩溃
+    "--noupx",
+]
+
+if __name__ == "__main__":
+    PyInstaller.__main__.run(args)
+    print(f"\n[OK] 构建完成，产物目录: {DIST}")
+    print(f"[提示] 运行前请确保 Release-Package/Resources/html 与 Resources/Config 已就位（由 NSIS 整体分发）。")
