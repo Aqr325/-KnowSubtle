@@ -324,14 +324,17 @@ def _open_pyqt_window(port: int) -> str:
         QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     except Exception:
         pass
-    # 2) 渲染模式：默认「平衡」模式，兼顾流畅与防闪
-    #    背景：上一版为彻底消除 Intel 集显闪屏用了 "--disable-gpu" 全软件渲染，
-    #    但光栅也走 CPU，导致 rich 仪表盘卡顿。现默认改为平衡模式：
-    #      --disable-gpu-compositing        : 仅把「最终显示合成」放到 CPU，光栅仍走 GPU（流畅）
-    #      --disable-features=VizDisplayCompositor : 规避 Intel 上最常见的闪屏来源
-    #    若平衡模式在你的机器上仍闪，设 KS_SOFTWARE_RENDER=1 退回全软件（更稳但更卡，无需重打包）。
+    # 2) 渲染模式：【默认流畅优先】开启 GPU 合成 + GPU 光栅，规避滚动卡顿
+    #    背景：上一轮（dd1cfdc2）为防闪用了 "--disable-gpu-compositing"，把整页合成退回 CPU，
+    #    导致上下滚动极卡（每帧都要 CPU 重新合成整张位图）。现默认改为：
+    #      --enable-gpu-rasterization --enable-gpu-compositing : 光栅与显示合成均走 GPU（滚动流畅）
+    #      --disable-features=VizDisplayCompositor            : 禁用 Viz 显示合成器，
+    #         规避 Intel 集显最常见的闪屏源；禁用后回退到旧 cc 合成器，仍走 GPU，故流畅且相对稳定。
+    #    另配合 Qt 层防闪（深色背景 / 不透明合成 WA_OpaquePaintEvent / 共享 GL 上下文），进一步抑制闪烁。
+    #    权衡：个别机器若默认仍闪，设 KS_SOFTWARE_RENDER=1 退回全软件渲染（最稳但卡，无需重打包）。
     _chromium_flags = (
-        "--disable-gpu-compositing --disable-features=VizDisplayCompositor"
+        "--enable-gpu-rasterization --enable-gpu-compositing "
+        "--disable-features=VizDisplayCompositor"
     )
     if os.environ.get("KS_SOFTWARE_RENDER"):
         _chromium_flags = (
