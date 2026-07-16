@@ -324,11 +324,21 @@ def _open_pyqt_window(port: int) -> str:
         QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     except Exception:
         pass
-    # 2) 强制软件渲染 + 软件合成，彻底关闭 GPU 硬件加速（最稳，规避显卡驱动闪烁/崩溃）
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
-        "--disable-features=VizDisplayCompositor"
+    # 2) 渲染模式：默认「平衡」模式，兼顾流畅与防闪
+    #    背景：上一版为彻底消除 Intel 集显闪屏用了 "--disable-gpu" 全软件渲染，
+    #    但光栅也走 CPU，导致 rich 仪表盘卡顿。现默认改为平衡模式：
+    #      --disable-gpu-compositing        : 仅把「最终显示合成」放到 CPU，光栅仍走 GPU（流畅）
+    #      --disable-features=VizDisplayCompositor : 规避 Intel 上最常见的闪屏来源
+    #    若平衡模式在你的机器上仍闪，设 KS_SOFTWARE_RENDER=1 退回全软件（更稳但更卡，无需重打包）。
+    _chromium_flags = (
+        "--disable-gpu-compositing --disable-features=VizDisplayCompositor"
     )
+    if os.environ.get("KS_SOFTWARE_RENDER"):
+        _chromium_flags = (
+            "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
+            "--disable-features=VizDisplayCompositor"
+        )
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags
 
     class _DesktopWindow(QMainWindow):
         def __init__(self):
@@ -568,7 +578,8 @@ def main():
     server_thread.start()
 
     # 无显示 / 测试环境：仅起服务便于验证（不创建窗口）
-    if os.environ.get("WC_HEADLESS"):
+    # 注意：显式判断 "1/true/yes"，避免 "WC_HEADLESS=0" 被当成真值（非空字符串皆真）
+    if os.environ.get("WC_HEADLESS", "").strip().lower() in ("1", "true", "yes"):
         _log("WC_HEADLESS=1：仅启动本地服务，不创建窗口。")
         try:
             while not stop_event.is_set():
