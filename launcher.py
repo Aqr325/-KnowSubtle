@@ -308,14 +308,27 @@ def _open_pyqt_window(port: int) -> str:
     try:
         from PyQt6.QtWidgets import QApplication, QMainWindow
         from PyQt6.QtWebEngineWidgets import QWebEngineView
-        from PyQt6.QtCore import QUrl
-        from PyQt6.QtGui import QIcon
+        from PyQt6.QtCore import QUrl, Qt
+        from PyQt6.QtGui import QIcon, QColor
     except Exception as e:
         _log(f"PyQt6 不可用，回退到浏览器: {type(e).__name__}: {e}")
         return "pyqt-unavailable"
 
     # 关闭 QtWebEngine 子进程沙箱：规避部分受限/权限环境下的启动失败
     os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
+
+    # ===== 防闪屏加固（针对 Intel 集显 + WebEngine GPU 加速偶发闪烁）=====
+    # 1) 共享 OpenGL 上下文：避免 WebEngine 独立上下文在窗口内反复重建导致闪烁
+    try:
+        from PyQt6.QtCore import QCoreApplication
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
+    except Exception:
+        pass
+    # 2) 强制软件渲染 + 软件合成，彻底关闭 GPU 硬件加速（最稳，规避显卡驱动闪烁/崩溃）
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+        "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
+        "--disable-features=VizDisplayCompositor"
+    )
 
     class _DesktopWindow(QMainWindow):
         def __init__(self):
@@ -324,6 +337,16 @@ def _open_pyqt_window(port: int) -> str:
             self.resize(1280, 800)
             self.setMinimumSize(1024, 680)
             self._view = QWebEngineView()
+            # 消除加载白闪：在 C++ 层与样式层均把背景设为仪表盘深色，
+            # 页面尚未注入内容时窗口就是深色，不再闪一下白屏
+            try:
+                self._view.page().setBackgroundColor(QColor(0x12, 0x0F, 0x17))
+            except Exception:
+                pass
+            self._view.setStyleSheet("background-color:#120F17;")
+            # 关闭透明背景与半透明合成，避免 Windows DWM 合成导致的窗口闪烁
+            self._view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+            self._view.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
             self.setCentralWidget(self._view)
             self._view.load(QUrl(url))
             _ico = _resolve_app_icon()
