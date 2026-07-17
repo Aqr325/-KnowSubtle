@@ -64,6 +64,11 @@ def _log(msg: str):
         pass
 
 
+# 当前生效的渲染模式（含 Chromium flags），供 _write_diagnose 与启动日志使用；
+# 在 _open_pyqt_window 选定渲染模式后赋值，早期错误时为空属正常。
+_RENDER_MODE_INFO = ""
+
+
 def _find_free_port(preferred: int, host: str = "127.0.0.1", span: int = 100) -> int:
     """从 preferred 起向上探测第一个可绑定的端口，避免端口被占用直接崩溃。"""
     for p in range(preferred, preferred + span):
@@ -199,6 +204,7 @@ def _write_diagnose(title: str, detail: str):
             f"服务线程错误(_server_error): {_server_error}",
             f"本应监听 URL (last_url.txt): {last_url}",
             f"推断数据库路径: {db_path}",
+            f"渲染模式: {_RENDER_MODE_INFO}",
             f"APPDATA: {os.environ.get('APPDATA')}",
         ]
         text = "\n".join(lines)
@@ -349,29 +355,36 @@ def _open_pyqt_window(port: int) -> str:
     #  - KS_SOFTWARE_RENDER=1 ：全软件渲染，最稳但最卡，最后兜底。
     #  - KS_BALANCE=1 ：显式平衡模式（与默认一致，保留以兼容旧开关）。
     if os.environ.get("KS_SOFTWARE_RENDER"):
+        _mode_name = "全软件渲染(SOFTWARE_RENDER)"
         _chromium_flags = (
             "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     elif os.environ.get("KS_GPU_COMPOSITING"):
         # 显式全 GPU 合成：最丝滑滚动，但 Intel 集显可能闪屏
+        _mode_name = "全GPU合成(GPU_COMPOSITING)"
         _chromium_flags = (
             "--enable-gpu-rasterization --enable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     elif os.environ.get("KS_BALANCE"):
         # 显式平衡模式（与默认一致，保留以兼容旧开关）
+        _mode_name = "平衡模式(BALANCE)"
         _chromium_flags = (
             "--enable-gpu-rasterization --disable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     else:
         # 默认：平衡模式（GPU 光栅 + CPU 合成），规避集显 GPU 合成闪屏
+        _mode_name = "平衡模式(默认)"
         _chromium_flags = (
             "--enable-gpu-rasterization --disable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags
+    global _RENDER_MODE_INFO
+    _RENDER_MODE_INFO = f"{_mode_name} | flags={_chromium_flags}"
+    _log(f"渲染模式: {_RENDER_MODE_INFO}")
 
     _UI_BG = "#120F17"
     _UI_BAR = "#1A1722"
