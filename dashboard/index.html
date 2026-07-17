@@ -2891,6 +2891,17 @@
       opts.body ? { body: opts.body } : {})).then(function(r){ return r.ok ? r.json() : null; });
   }
 
+  // 与 apiFetch 相同地注入 token，但返回原始 Response，便于判读状态码/错误信息
+  function authFetch(url, opts) {
+    opts = opts || {};
+    var headers = opts.headers || {};
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    var token = localStorage.getItem('wc_auth_token');
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return fetch(url, Object.assign({ method: opts.method || 'GET', headers: headers },
+      opts.body ? { body: opts.body } : {}));
+  }
+
   function formatTime(s) {
     var m = Math.floor(s/60), sec = s%60;
     return (m<10?'0':'')+m+':'+(sec<10?'0':'')+sec;
@@ -3758,7 +3769,7 @@
       var controller = new AbortController();
       var timeout = setTimeout(function() { controller.abort(); }, 60000);
 
-      fetch('/api/chat/agent', {
+      authFetch('/api/chat/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agent: { name: agent.name }, messages: messages }),
@@ -3796,7 +3807,7 @@
 
     // Persist LLM config to the backend (server stores the key; never cached locally)
     function saveLLMConfig(body) {
-      return fetch('/api/config/llm', {
+      return authFetch('/api/config/llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
@@ -4776,6 +4787,7 @@ function handleRegister() {
   if (!username) { errEl.textContent = '请输入用户名'; return; }
   if (username.length < 2) { errEl.textContent = '用户名至少 2 个字符'; return; }
   if (!email) { errEl.textContent = '请输入邮箱'; return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { errEl.textContent = '邮箱格式不正确'; return; }
   if (!password) { errEl.textContent = '请输入密码'; return; }
   if (password.length < 6) { errEl.textContent = '密码至少 6 个字符'; return; }
   errEl.textContent = '';
@@ -4813,15 +4825,97 @@ function handleLogout() {
   toast('已退出登录', 'info');
 }
 
-// ── Show auth profile (placeholder) ──
+// ── Show auth profile (editable modal) ──
 function showAuthProfile() {
-  if (!AuthState.user) return;
-  var u = AuthState.user;
-  var body = '<div class="detail-stat"><span>用户名</span><span>' + escHtml(u.username) + '</span></div>' +
-    '<div class="detail-stat"><span>邮箱</span><span>' + escHtml(u.email) + '</span></div>' +
-    '<div class="detail-stat"><span>显示名称</span><span>' + escHtml(u.display_name || u.username) + '</span></div>' +
-    '<div class="detail-stat"><span>注册时间</span><span>' + escHtml((u.created_at || '').split('T')[0]) + '</span></div>';
-  showDetailPopup('<span>我的账号</span>', body);
+  if (!AuthState.token) { toast('请先登录', 'info'); return; }
+  authFetch('/api/auth/profile').then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) throw new Error(data.detail || '加载资料失败');
+      return data;
+    });
+  }).then(function(u) {
+    AuthState.user = u;
+    var pw = $('#profileUsername'), em = $('#profileEmail'), dn = $('#profileDisplayName'), av = $('#profileAvatar');
+    if (pw) pw.value = u.username || '';
+    if (em) em.value = u.email || '';
+    if (dn) dn.value = u.display_name || '';
+    if (av) av.value = u.avatar || '';
+    var err = $('#profileError'); if (err) err.textContent = '';
+    var pm = $('#profileModal'); if (pm) pm.classList.add('show');
+  }).catch(function(err) {
+    toast(err.message || '加载资料失败', 'error');
+  });
+}
+
+function closeProfileModal() {
+  var pm = $('#profileModal'); if (pm) pm.classList.remove('show');
+}
+
+function submitProfile() {
+  var dn = $('#profileDisplayName'), av = $('#profileAvatar'), err = $('#profileError');
+  var displayName = dn ? dn.value.trim() : '';
+  var avatar = av ? av.value.trim() : '';
+  if (displayName.length > 64) { if (err) err.textContent = '显示名称不超过 64 个字符'; return; }
+  if (avatar.length > 8) { if (err) err.textContent = '头像不超过 8 个字符'; return; }
+  if (err) err.textContent = '';
+  authFetch('/api/auth/profile', {
+    method: 'PUT',
+    body: JSON.stringify({ display_name: displayName, avatar: avatar })
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) throw new Error(data.detail || '保存失败');
+      return data;
+    });
+  }).then(function(u) {
+    AuthState.user = u;
+    renderAuthUI();
+    toast('资料已更新', 'success');
+  }).catch(function(err) {
+    if (err) err.textContent = err.message || '保存失败';
+  });
+}
+
+function submitChangePassword() {
+  var op = $('#profileOldPwd'), np = $('#profileNewPwd'), err = $('#profileError');
+  var oldPwd = op ? op.value : '';
+  var newPwd = np ? np.value : '';
+  if (!oldPwd) { if (err) err.textContent = '请输入当前密码'; return; }
+  if (newPwd.length < 6) { if (err) err.textContent = '新密码至少 6 个字符'; return; }
+  if (err) err.textContent = '';
+  authFetch('/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+  }).then(function(r) {
+    return r.json().then(function(data) {
+      if (!r.ok) throw new Error(data.detail || '修改失败');
+      return data;
+    });
+  }).then(function() {
+    if (op) op.value = '';
+    if (np) np.value = '';
+    toast('密码已更新，请重新登录', 'success');
+    // 改密后旧 token 仍有效，但建议重新登录以保证一致
+    setTimeout(function() { handleLogout(); }, 800);
+  }).catch(function(err) {
+    if (err) err.textContent = err.message || '修改失败';
+  });
+}
+
+function logoutAllDevices() {
+  if (!confirmDialog) { doLogoutAll(); return; }
+  confirmDialog('确认退出所有已登录设备？本设备也将被登出。').then(function(yes) {
+    if (yes) doLogoutAll();
+  });
+}
+function doLogoutAll() {
+  authFetch('/api/auth/logout-all', { method: 'POST' }).catch(function() {}).then(function() {
+    AuthState.token = null;
+    AuthState.user = null;
+    localStorage.removeItem('wc_auth_token');
+    closeProfileModal();
+    renderAuthUI();
+    toast('已退出所有设备', 'info');
+  });
 }
 
 // ── Close modal on outside click ──
@@ -4830,6 +4924,12 @@ document.addEventListener('DOMContentLoaded', function() {
   if (m) {
     m.addEventListener('click', function(e) {
       if (e.target === m) hideAuthModal();
+    });
+  }
+  var pm = document.getElementById('profileModal');
+  if (pm) {
+    pm.addEventListener('click', function(e) {
+      if (e.target === pm) closeProfileModal();
     });
   }
   // Enter key support
@@ -4843,6 +4943,29 @@ document.addEventListener('DOMContentLoaded', function() {
   initAuth();
 });
 </script>
+<!-- ═══ Profile Modal ═══ -->
+<div class="auth-overlay" id="profileModal">
+  <div class="auth-modal" id="profileModalInner">
+    <h2>我的账号</h2>
+    <div class="auth-error" id="profileError"></div>
+    <div class="auth-form active">
+      <div class="field"><label>用户名</label><input type="text" id="profileUsername" disabled></div>
+      <div class="field"><label>邮箱</label><input type="email" id="profileEmail" disabled></div>
+      <div class="field"><label>显示名称</label><input type="text" id="profileDisplayName" placeholder="如何称呼你" maxlength="64" autocomplete="name"></div>
+      <div class="field"><label>头像（emoji，最多 8 字符）</label><input type="text" id="profileAvatar" placeholder="如 🚀" maxlength="8"></div>
+      <button class="auth-btn" onclick="submitProfile()">保存资料</button>
+    </div>
+    <div class="auth-form active" style="margin-top:18px;border-top:1px solid rgba(255,255,255,.08);padding-top:18px;">
+      <h3 style="font-size:14px;opacity:.8;margin:0 0 12px;font-weight:600;">修改密码</h3>
+      <div class="field"><label>当前密码</label><input type="password" id="profileOldPwd" autocomplete="current-password"></div>
+      <div class="field"><label>新密码（至少 6 位）</label><input type="password" id="profileNewPwd" autocomplete="new-password"></div>
+      <button class="auth-btn" onclick="submitChangePassword()">更新密码</button>
+    </div>
+    <button class="auth-btn" style="margin-top:14px;background:transparent;border:1px solid #e74c3c;color:#e74c3c;" onclick="logoutAllDevices()">退出所有设备</button>
+    <button class="auth-btn" style="margin-top:8px;background:rgba(255,255,255,.1);" onclick="closeProfileModal()">关闭</button>
+  </div>
+</div>
+
 <!-- ═══ Auth Modal ═══ -->
 <div class="auth-overlay" id="authModal">
   <div class="auth-modal" id="authModalInner">
