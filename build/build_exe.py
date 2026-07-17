@@ -70,6 +70,14 @@ args = [
     "--hidden-import=PyQt6.QtWebChannel",
     "--hidden-import=PyQt6.QtNetwork",
     "--hidden-import=PyQt6.QtPrintSupport",
+    # 排除未使用且在本无显示(headless)沙箱中 import 会死锁的 Qt 子模块。
+    # 本项目只用 QWebEngineView，不依赖 Qml/Quick/Positioning；hook-PyQt6 会把全部 Qt
+    # 子模块自动加为 hiddenimport，其中 PyQt6.QtQml 的 import 在 headless 环境下卡死，
+    # 导致 PyInstaller analysis 阶段永久挂起（日志冻结在 hook-PyQt6.QtQml.py）。显式排除即可。
+    "--exclude-module=PyQt6.QtQml",
+    "--exclude-module=PyQt6.QtQuick",
+    "--exclude-module=PyQt6.QtQuickWidgets",
+    "--exclude-module=PyQt6.QtPositioning",
     # 注意：不要 --collect-submodules=PyQt6 / --collect-data=PyQt6！
     # PyQt6 自带 PyInstaller hook 已会自动收集 QtWebEngine 二进制与资源
     # (QtWebEngineProcess.exe / icudtl.dat / qtwebengine_resources.pak / locales)，

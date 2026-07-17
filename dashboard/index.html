@@ -2192,6 +2192,22 @@
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
+  /* Promote fixed UI + long scroll containers to their own composited layer.
+     In balanced mode (CPU compositor) this keeps a cached texture so scrolling
+     only blits instead of re-rasterizing every frame (anti-jank). */
+  body.perf-mode .scene-header,
+  body.perf-mode .scene-footer,
+  body.perf-mode .chat-messages,
+  body.perf-mode .agent-list,
+  body.perf-mode .vocab-list,
+  body.perf-mode .task-list,
+  body.perf-mode .pomo-history,
+  body.perf-mode .notif-list,
+  body.perf-mode .config-body {
+    will-change: transform;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
   /* Replace frosted glass with near-solid backgrounds so text stays readable */
   body.perf-mode .glass,
   body.perf-mode .stat-card,

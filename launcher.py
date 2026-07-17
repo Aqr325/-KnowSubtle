@@ -340,26 +340,35 @@ def _open_pyqt_window(port: int) -> str:
         QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     except Exception:
         pass
-    # 渲染模式（流畅优先；闪屏兜底）：
-    #  - 默认「全 GPU 合成」：光栅+合成均走 GPU。QWebEngineView 滚动掉帧的头号原因是
-    #    CPU 合成 + 每帧重采样，全 GPU 合成可根除上下滚动卡顿。保留
-    #    --disable-features=VizDisplayCompositor 缓解个别集显的显示合成器闪屏。
-    #  - KS_SOFTWARE_RENDER=1 ：全软件渲染，最稳但最卡，仅在 GPU 合成闪屏不可接受时兜底。
-    #  - KS_BALANCE=1 ：旧「GPU 光栅 + CPU 合成」模式（规避集显 GPU 合成层闪屏，但滚动不如全 GPU 流畅）。
+    # 渲染模式（稳定优先；流畅/兜底）：
+    #  - 默认「平衡模式」：GPU 光栅 + CPU 合成（关闭 GPU 合成层）。Intel 集显上 GPU 合成层
+    #    会与 Windows DWM 双缓冲冲突导致闪烁/不稳定，关闭 GPU 合成即可根除闪屏；
+    #    同时保留 GPU 光栅化保住大部分滚动流畅度（配合前端合成层提升进一步抗卡顿）。
+    #  - KS_GPU_COMPOSITING=1 ：全 GPU 合成（光栅+合成均走 GPU，滚动最丝滑），
+    #    仅在你的机器不闪时启用；集显上仍可能闪烁。
+    #  - KS_SOFTWARE_RENDER=1 ：全软件渲染，最稳但最卡，最后兜底。
+    #  - KS_BALANCE=1 ：显式平衡模式（与默认一致，保留以兼容旧开关）。
     if os.environ.get("KS_SOFTWARE_RENDER"):
         _chromium_flags = (
             "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
             "--disable-features=VizDisplayCompositor"
         )
+    elif os.environ.get("KS_GPU_COMPOSITING"):
+        # 显式全 GPU 合成：最丝滑滚动，但 Intel 集显可能闪屏
+        _chromium_flags = (
+            "--enable-gpu-rasterization --enable-gpu-compositing "
+            "--disable-features=VizDisplayCompositor"
+        )
     elif os.environ.get("KS_BALANCE"):
+        # 显式平衡模式（与默认一致，保留以兼容旧开关）
         _chromium_flags = (
             "--enable-gpu-rasterization --disable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     else:
-        # 默认：全 GPU 合成（最流畅滚动）
+        # 默认：平衡模式（GPU 光栅 + CPU 合成），规避集显 GPU 合成闪屏
         _chromium_flags = (
-            "--enable-gpu-rasterization --enable-gpu-compositing "
+            "--enable-gpu-rasterization --disable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags
