@@ -3,7 +3,7 @@ name: Verify API & Auth
 # 推送 main / 开 PR 时，自动启动后端（DEMO/离线模式）跑：
 #   1) verify_all.py  —— 54 项端到端功能验证（端口 8753）
 #   2) verify_live2.py —— 注册登录鉴权回归（源码 uvicorn，18 项）
-# 另设手动/打 tag 触发的 Windows 任务，构建冻结 exe 并跑 test_exe.py（18 项），
+# 同时自动在 windows-latest 上构建冻结 exe 并跑 test_exe.py（18 项），
 # 确保打包后的二进制同样强制鉴权。任一验证失败 -> CI 标红，阻断合入。
 on:
   push:
@@ -68,10 +68,8 @@ jobs:
           path: server.log
 
   verify-exe:
-    name: Frozen exe auth (windows, manual / tag)
+    name: Frozen exe auth (windows, auto on push/PR)
     runs-on: windows-latest
-    # 构建 exe 较重，仅手动触发或打 v* tag 时跑；推送 main 不自动跑以免烧分钟。
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
