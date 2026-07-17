@@ -340,6 +340,76 @@ def _resolve_app_icon():
     return None
 
 
+def _first_launch_render_guide(app) -> str:
+    """首次启动引导：让用户选择渲染模式，降低发现成本（而非藏在托盘右键）。
+
+    返回用户选择的模式键 ('balance'/'gpu'/'software')；取消或关闭时默认 'balance'。
+    纯 Qt 控件、无需 QWebEngine，可在平衡模式下安全弹出。
+    """
+    from PyQt6.QtWidgets import (
+        QDialog, QVBoxLayout, QLabel, QButtonGroup, QRadioButton,
+        QDialogButtonBox, QFrame,
+    )
+    from PyQt6.QtCore import Qt
+
+    dlg = QDialog()
+    dlg.setWindowTitle("欢迎使用 KnowSubtle")
+    dlg.setMinimumWidth(480)
+    dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+
+    layout = QVBoxLayout(dlg)
+    layout.setContentsMargins(22, 20, 22, 18)
+    layout.setSpacing(12)
+
+    title = QLabel("选择渲染模式")
+    title.setStyleSheet("font:700 17px 'Microsoft YaHei'; color:#E6E6F0;")
+    layout.addWidget(title)
+
+    sub = QLabel(
+        "为获得最佳体验，请选择适合你电脑显卡的渲染模式。\n"
+        "选择后可在系统托盘右键「渲染模式」随时切换。"
+    )
+    sub.setStyleSheet("color:#9AA0B5; font:12px 'Microsoft YaHei';")
+    sub.setWordWrap(True)
+    layout.addWidget(sub)
+
+    opts = [
+        ("balance", "平衡模式（推荐 · 默认）",
+         "GPU 光栅 + CPU 合成，稳定不闪、滚动流畅，适合绝大多数电脑。"),
+        ("gpu", "全 GPU 合成（最丝滑）",
+         "滚动最顺滑，但部分集成显卡可能出现闪屏。"),
+        ("software", "全软件渲染（最稳 · 最卡）",
+         "完全不依赖显卡，最稳定但最卡，仅作兜底。"),
+    ]
+    group = QButtonGroup(dlg)
+    selected = {"mode": "balance"}
+    for i, (key, t, d) in enumerate(opts):
+        rb = QRadioButton()
+        rb.setText(f"<b>{t}</b><br><span style='color:#8A90A6;'>{d}</span>")
+        rb.setStyleSheet("font:12px 'Microsoft YaHei'; padding:5px;")
+        group.addButton(rb, i)
+        if key == "balance":
+            rb.setChecked(True)
+        layout.addWidget(rb)
+
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setStyleSheet("color:#2A2636;")
+    layout.addWidget(line)
+
+    bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+    bbox.button(QDialogButtonBox.StandardButton.Ok).setText("开始使用")
+    bbox.accepted.connect(dlg.accept)
+    bbox.rejected.connect(dlg.reject)
+    layout.addWidget(bbox)
+
+    if dlg.exec() == QDialog.DialogCode.Accepted:
+        idx = group.checkedId()
+        if 0 <= idx < len(opts):
+            selected["mode"] = opts[idx][0]
+    return selected["mode"]
+
+
 def _open_pyqt_window(port: int) -> str:
     """用 PyQt6 原生桌面窗口（内嵌 Chromium/QWebEngine）承载仪表盘。
 
@@ -626,6 +696,23 @@ def _open_pyqt_window(port: int) -> str:
     except Exception as e:
         _log(f"QApplication 初始化失败，回退到浏览器: {type(e).__name__}: {e}")
         return "pyqt-unavailable"
+
+    # 首次启动引导：用户尚未表达任何渲染偏好时，弹窗引导选择（降低发现成本）。
+    # 无显示/测试环境 (WC_HEADLESS) 或已设 KS_* 显式开关则跳过。
+    if (
+        not os.environ.get("WC_HEADLESS")
+        and _load_render_mode_pref() is None
+        and not os.environ.get("KS_GPU_COMPOSITING")
+        and not os.environ.get("KS_SOFTWARE_RENDER")
+        and not os.environ.get("KS_BALANCE")
+    ):
+        _chosen = _first_launch_render_guide(app)
+        _save_render_mode_pref(_chosen)
+        if _chosen != "balance":
+            # 非默认模式需重启以重新应用 Chromium flags（须在 QWebEngine 初始化前生效）
+            _log(f"首次引导选择渲染模式：{_chosen}，重启以应用。")
+            return "restart"
+        _log("首次引导选择渲染模式：平衡模式（默认，无需重启）。")
 
     win = _DesktopWindow()
 

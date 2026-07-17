@@ -1,9 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_submodules
 
-hiddenimports = ['local_metagpt.stub', 'learning_agent_system.orchestrator', 'learning_agent_system.schema', 'sqlalchemy', 'sqlalchemy.dialects.sqlite.aiosqlite', 'aiosqlite', 'webview', 'bottle', 'PyQt6', 'PyQt6.sip', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'PyQt6.QtWebEngineWidgets', 'PyQt6.QtWebEngineCore', 'PyQt6.QtWebChannel', 'PyQt6.QtNetwork', 'PyQt6.QtPrintSupport', 'httpx', 'yaml', 'rich']
+hiddenimports = ['local_metagpt.stub', 'learning_agent_system.orchestrator', 'learning_agent_system.schema', 'sqlalchemy', 'sqlalchemy.dialects.sqlite.aiosqlite', 'aiosqlite', 'bottle', 'PyQt6', 'PyQt6.sip', 'PyQt6.QtCore', 'PyQt6.QtWidgets', 'PyQt6.QtGui', 'PyQt6.QtWebEngineWidgets', 'PyQt6.QtWebEngineCore', 'PyQt6.QtWebChannel', 'PyQt6.QtNetwork', 'PyQt6.QtPrintSupport', 'httpx', 'yaml', 'rich']
 hiddenimports += collect_submodules('learning_agent_system')
-hiddenimports += collect_submodules('webview')
 
 
 a = Analysis(
@@ -15,7 +14,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['metagpt', 'PyQt6.QtQml', 'PyQt6.QtQuick', 'PyQt6.QtQuickWidgets', 'PyQt6.QtPositioning'],
+    excludes=['metagpt', 'webview', 'PyQt6.QtQml', 'PyQt6.QtQuick', 'PyQt6.QtQuickWidgets', 'PyQt6.QtPositioning'],
     noarchive=False,
     optimize=0,
 )

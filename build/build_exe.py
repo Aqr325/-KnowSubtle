@@ -55,10 +55,13 @@ args = [
     "--hidden-import=sqlalchemy",
     "--hidden-import=sqlalchemy.dialects.sqlite.aiosqlite",
     "--hidden-import=aiosqlite",
-    # pywebview：原生桌面窗口（import 名为 webview；bottle 为其可选依赖，一并收集避免运行期缺失）
-    "--hidden-import=webview",
+    # bottle：webview 的可选依赖，作为安全隐藏导入保留（不影响启动）。
+    # 注意：刻意【不】收集 pywebview(webview)。其 PyInstaller 运行时 hook(hook-webview.py)
+    # 会在解释器启动早期强制 import webview，在无显示/沙箱环境会卡死，导致 exe 启动即挂起、
+    # 连日志重定向都来不及执行。本项目桌面窗口以 PyQt6+QWebEngine 为主，浏览器兜底走
+    # 系统 webbrowser；webview 仅作次级 fallback，故显式排除，使构建结果在所有环境一致可靠。
     "--hidden-import=bottle",
-    "--collect-submodules=webview",
+    "--exclude-module=webview",
     # PyQt6 桌面窗口（自带 Chromium，不依赖系统 WebView2）：承载仪表盘的真正桌面程序
     "--hidden-import=PyQt6",
     "--hidden-import=PyQt6.sip",
