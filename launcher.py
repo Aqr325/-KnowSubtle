@@ -22,6 +22,7 @@
 import os
 import sys
 import json
+import subprocess
 import time
 import socket
 import threading
@@ -67,6 +68,39 @@ def _log(msg: str):
 # 当前生效的渲染模式（含 Chromium flags），供 _write_diagnose 与启动日志使用；
 # 在 _open_pyqt_window 选定渲染模式后赋值，早期错误时为空属正常。
 _RENDER_MODE_INFO = ""
+# 请求重启标志：托盘菜单切换渲染模式并选择「立即重启」后置 True，
+# _open_pyqt_window 在 app.exec() 返回后据此返回 "restart"，由 main 重启进程。
+_PENDING_RESTART = False
+
+# 渲染模式持久化偏好：托盘菜单切换后写入，下次启动读取并应用
+_RENDER_PREFS = {"balance": "平衡模式", "gpu": "全GPU合成", "software": "全软件渲染"}
+
+
+def _render_pref_path() -> Path:
+    return Path(os.environ.get("APPDATA", str(ROOT))) / "KnowSubtle" / "render_mode.txt"
+
+
+def _load_render_mode_pref():
+    """读取已保存的渲染模式偏好，返回 'balance'/'gpu'/'software' 或 None。"""
+    try:
+        p = _render_pref_path()
+        if p.exists():
+            v = p.read_text(encoding="utf-8").strip().lower()
+            if v in _RENDER_PREFS:
+                return v
+    except Exception:
+        pass
+    return None
+
+
+def _save_render_mode_pref(mode: str):
+    """持久化渲染模式偏好到 render_mode.txt（下次启动生效）。"""
+    try:
+        p = _render_pref_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(mode, encoding="utf-8")
+    except Exception as e:
+        _log(f"保存渲染模式偏好失败: {type(e).__name__}: {e}")
 
 
 def _find_free_port(preferred: int, host: str = "127.0.0.1", span: int = 100) -> int:
@@ -328,7 +362,7 @@ def _open_pyqt_window(port: int) -> str:
     try:
         from PyQt6.QtWidgets import (
             QApplication, QMainWindow, QWidget, QLabel, QHBoxLayout,
-            QVBoxLayout, QPushButton, QSystemTrayIcon, QMenu,
+            QVBoxLayout, QPushButton, QSystemTrayIcon, QMenu, QMessageBox,
         )
         from PyQt6.QtWebEngineWidgets import QWebEngineView
         from PyQt6.QtCore import QUrl, Qt, QSettings, QEvent, QTimer, QPoint
@@ -354,6 +388,13 @@ def _open_pyqt_window(port: int) -> str:
     #    仅在你的机器不闪时启用；集显上仍可能闪烁。
     #  - KS_SOFTWARE_RENDER=1 ：全软件渲染，最稳但最卡，最后兜底。
     #  - KS_BALANCE=1 ：显式平衡模式（与默认一致，保留以兼容旧开关）。
+    # 持久化渲染偏好：命令行环境变量优先；未显式指定时应用托盘菜单已保存的选择
+    _pref = _load_render_mode_pref()
+    if _pref == "gpu" and not os.environ.get("KS_GPU_COMPOSITING"):
+        os.environ["KS_GPU_COMPOSITING"] = "1"
+    elif _pref == "software" and not os.environ.get("KS_SOFTWARE_RENDER"):
+        os.environ["KS_SOFTWARE_RENDER"] = "1"
+    # _pref == "balance" 或 None → 走默认平衡模式（不设变量，与程序默认一致）
     if os.environ.get("KS_SOFTWARE_RENDER"):
         _mode_name = "全软件渲染(SOFTWARE_RENDER)"
         _chromium_flags = (
@@ -602,10 +643,56 @@ def _open_pyqt_window(port: int) -> str:
                 tray.setIcon(app.windowIcon())
             tray.setToolTip("KnowSubtle 学习宇宙")
             menu = QMenu()
-            # 当前渲染模式（只读标签；每次弹出菜单前实时刷新，反映 _RENDER_MODE_INFO）
+            # 当前渲染模式（可点击：展开子菜单直接切换；切换后持久化并需重启生效）
             act_mode = QAction("渲染模式：未知", app)
-            act_mode.setDisabled(True)
             act_mode.setIconVisibleInMenu(False)
+
+            # 子菜单：三种渲染档位，当前生效项打勾
+            _mode_submenu = QMenu("切换渲染模式", menu)
+            _mode_labels = {
+                "balance": "平衡模式（默认·不闪）",
+                "gpu": "全GPU合成（最丝滑·集显可能闪）",
+                "software": "全软件渲染（最稳·最卡）",
+            }
+
+            def _current_pref_key():
+                _info = _RENDER_MODE_INFO or ""
+                if "GPU_COMPOSITING" in _info:
+                    return "gpu"
+                if "SOFTWARE_RENDER" in _info:
+                    return "software"
+                return "balance"
+
+            _mode_actions = {}
+
+            def _apply_render_mode(mode: str):
+                _save_render_mode_pref(mode)
+                _cur = _current_pref_key()
+                _msg = (
+                    f"已选择渲染模式：{_mode_labels.get(mode, mode)}\n"
+                    f"（之前为：{_mode_labels.get(_cur, _cur)}）\n\n"
+                    f"渲染模式需在桌面程序重启后生效。是否立即重启？"
+                )
+                _reply = QMessageBox.question(
+                    win, "切换渲染模式", _msg,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if _reply == QMessageBox.StandardButton.Yes:
+                    global _PENDING_RESTART
+                    _PENDING_RESTART = True
+                    app.exit()
+
+            for _m, _lab in _mode_labels.items():
+                _a = QAction(_lab, app)
+                _a.setCheckable(True)
+                _a.setData(_m)
+                _a.triggered.connect(
+                    lambda checked=False, mm=_m: _apply_render_mode(mm)
+                )
+                _mode_submenu.addAction(_a)
+                _mode_actions[_m] = _a
+            act_mode.setMenu(_mode_submenu)
 
             def _refresh_mode_label():
                 _info = _RENDER_MODE_INFO or ""
@@ -614,9 +701,12 @@ def _open_pyqt_window(port: int) -> str:
                     _flags = _info.split("flags=", 1)[1] if "flags=" in _info else ""
                 else:
                     _name, _flags = "未知（极早期/无头？）", ""
-                act_mode.setText(f"渲染模式：{_name}")
+                act_mode.setText(f"渲染模式：{_name}  \u25b6")
                 if _flags:
-                    act_mode.setToolTip(f"Chromium flags: {_flags}")
+                    act_mode.setToolTip(f"Chromium flags: {_flags}\n点击展开可切换渲染模式")
+                _cur = _current_pref_key()
+                for _m, _a in _mode_actions.items():
+                    _a.setChecked(_m == _cur)
 
             menu.aboutToShow.connect(_refresh_mode_label)
             menu.addAction(act_mode)
@@ -652,6 +742,8 @@ def _open_pyqt_window(port: int) -> str:
 
     win.show()
     app.exec()
+    if _PENDING_RESTART:
+        return "restart"
     return "pyqt"
 
 
@@ -749,6 +841,8 @@ def _open_native_window(port: int) -> str:
     r = _open_pyqt_window(port)
     if r == "pyqt":
         return "pyqt"
+    if r == "restart":
+        return "restart"
     if r == "failed":
         return "failed"
     # pyqt-unavailable → 回退
@@ -860,6 +954,17 @@ def main():
         return
 
     mode = _open_native_window(port)
+    if mode == "restart":
+        # 托盘菜单切换渲染模式后请求重启：先释放单实例锁，再启动全新进程，
+        # 最后退出旧进程（新 PID 不与基于 PID 的锁冲突）。
+        _log("渲染模式切换：重启桌面程序以应用新设置。")
+        _shutdown(server_thread)
+        _release_instance_lock()
+        try:
+            subprocess.Popen([sys.executable])
+        except Exception as e:
+            _log(f"重启失败（请手动重启 KnowSubtle）: {type(e).__name__}: {e}")
+        sys.exit(0)
     if mode in ("browser", "black-fallback"):
         # 回退路径：用控制窗口保活，确保浏览器里的服务不会因窗口销毁而消失
         _run_control_window(url)
