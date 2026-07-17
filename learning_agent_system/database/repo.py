@@ -851,7 +851,7 @@ class UserRepository:
         return user
 
     async def create_token(self, user_id: int, ttl_hours: int = 24 * 30) -> AuthToken:
-        """创建长效 token（默认 30 天），同时吊销旧 token（单设备登录策略）。"""
+        """创建长效 token（默认 30 天），并吊销该用户其他活跃 token（单设备登录策略）。"""
         token_str = _secrets.token_hex(32)
         expires = datetime.now() + _timedelta(hours=ttl_hours)
         token = AuthToken(
@@ -862,7 +862,9 @@ class UserRepository:
             is_revoked=False,
         )
         self.s.add(token)
-        await self.s.commit()
+        await self.s.commit()  # 先落库，确保 keep_token 存在
+        # 吊销除当前新 token 外的所有活跃 token（单设备登录）
+        await self.revoke_other_tokens(user_id, token_str)
         await self.s.refresh(token)
         return token
 
@@ -907,3 +909,59 @@ class UserRepository:
             count += 1
         await self.s.commit()
         return count
+
+    # ── 单设备登录（吊销其他活跃 token）──
+
+    async def revoke_other_tokens(self, user_id: int, keep_token: str) -> int:
+        """吊销该用户除 keep_token 之外的所有活跃 token，返回影响行数。"""
+        result = await self.s.execute(
+            select(AuthToken).where(
+                AuthToken.user_id == user_id,
+                AuthToken.is_revoked == False,  # noqa: E712
+                AuthToken.token != keep_token,
+            )
+        )
+        tokens = result.scalars().all()
+        count = 0
+        for t in tokens:
+            t.is_revoked = True
+            count += 1
+        await self.s.commit()
+        return count
+
+    # ── 资料更新 ──
+
+    async def update_last_login(self, user_id: int) -> None:
+        """登录成功时刷新 last_login。"""
+        user = await self.get_by_id(user_id)
+        if user:
+            user.last_login = datetime.now()
+            await self.s.commit()
+
+    async def update_profile(self, user_id: int, display_name: Optional[str] = None,
+                             avatar: Optional[str] = None) -> Optional[User]:
+        """更新显示名称 / 头像，返回更新后的 User。"""
+        user = await self.get_by_id(user_id)
+        if not user:
+            return None
+        if display_name is not None:
+            user.display_name = display_name[:64]
+        if avatar is not None:
+            user.avatar = avatar[:8]
+        await self.s.commit()
+        await self.s.refresh(user)
+        return user
+
+    async def change_password(self, user_id: int, old_password: str,
+                              new_password: str) -> bool:
+        """校验原密码后更新密码；原密码错误返回 False。"""
+        user = await self.get_by_id(user_id)
+        if not user:
+            return False
+        if not self._verify_password(old_password, user.password_hash, user.password_salt):
+            return False
+        pw_hash, pw_salt = self._hash_password(new_password)
+        user.password_hash = pw_hash
+        user.password_salt = pw_salt
+        await self.s.commit()
+        return True

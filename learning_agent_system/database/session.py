@@ -119,14 +119,20 @@ async def get_engine():
     """获取或创建异步引擎（单例）"""
     global _async_engine, _async_session_factory
     if _async_engine is None:
-        _async_engine = create_async_engine(
-            DB_URL,
-            echo=False,
-            future=True,
-            pool_size=5,
-            max_overflow=10,
-            pool_pre_ping=True,
-        )
+        engine_kwargs = dict(echo=False, future=True)
+        if DB_URL.startswith("sqlite"):
+            # 单文件 SQLite + 单进程服务：用 StaticPool 让所有会话共享同一条连接，
+            # 避免连接池多连接各自事务快照不一致导致「刚提交的吊销/退出登录在另一条
+            # 连接上读不到旧 token 仍有效」的问题（TestClient 单连接不暴露，uvicorn
+            # 多线程下暴露）。check_same_thread=False 允许跨协程复用该连接。
+            from sqlalchemy.pool import StaticPool
+            engine_kwargs["poolclass"] = StaticPool
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs["pool_size"] = 5
+            engine_kwargs["max_overflow"] = 10
+            engine_kwargs["pool_pre_ping"] = True
+        _async_engine = create_async_engine(DB_URL, **engine_kwargs)
         _enable_foreign_keys(_async_engine)
         _async_session_factory = async_sessionmaker(
             _async_engine,

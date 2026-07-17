@@ -35,6 +35,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import yaml
 import httpx
 from pathlib import Path
@@ -96,6 +97,21 @@ class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1, max_length=128)
     remember: bool = False  # 勾选「记住我」→ 长效登录（30 天）
+
+
+# ── 校验规则 ──
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{2,32}$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class ProfileUpdateRequest(BaseModel):
+    display_name: str = Field("", max_length=64)
+    avatar: str = Field("", max_length=8)
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=6, max_length=128)
 
 # ── Logging ──
 logging.basicConfig(
@@ -992,11 +1008,50 @@ class AgentChatRequest(BaseModel):
     history: list = []
 
 
+async def _get_current_user(request: Request) -> Optional[Dict[str, Any]]:
+    """从 Authorization header / 请求作用域解析当前用户（可选鉴权——匿名访问可继续）。"""
+    # 优先复用中间件已解析的 user_id（避免重复查库）
+    uid = getattr(request.state, "user_id", None)
+    if uid is None:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return None
+        token_str = auth[len("Bearer "):].strip()
+        if not token_str:
+            return None
+        async with get_async_session() as session:
+            user = await UserRepository(session).get_user_by_token(token_str)
+            if not user:
+                return None
+            uid = user.id
+    async with get_async_session() as session:
+        user = await UserRepository(session).get_by_id(uid)
+        if not user:
+            return None
+        return {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "display_name": user.display_name,
+            "avatar": user.avatar,
+            "created_at": user.created_at.isoformat() if user.created_at else "",
+            "last_login": user.last_login.isoformat() if user.last_login else "",
+        }
+
+
+async def _require_user(request: Request) -> Dict[str, Any]:
+    """强制鉴权——未登录则 401。"""
+    user = await _get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录")
+    return user
+
+
 @app.get("/api/config/llm")
-async def get_llm_config() -> Dict[str, Any]:
+async def get_llm_config(user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
     """读取服务端 LLM 配置（绝不回传 api_key）。
 
-    本地单用户 + 绑定 127.0.0.1，与既有安全前提一致，无需额外鉴权。
+    需登录鉴权（chat/config 接口带 token）。
     """
     cfg = load_llm_config()
     return {
@@ -1007,10 +1062,10 @@ async def get_llm_config() -> Dict[str, Any]:
 
 
 @app.post("/api/config/llm")
-async def update_llm_config(request: LLMConfigRequest) -> Dict[str, Any]:
+async def update_llm_config(request: LLMConfigRequest, user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
     """写入服务端 LLM 配置（api_key 仅落服务端磁盘，不经浏览器）。
 
-    本地单用户 + 绑定 127.0.0.1，与既有安全前提一致，无需额外鉴权。
+    需登录鉴权（chat/config 接口带 token）。
     """
     base_url = (request.base_url or "").strip()
     model = (request.model or "").strip()
@@ -1048,9 +1103,10 @@ def _normalize_agent_messages(request: AgentChatRequest) -> List[Dict[str, Any]]
 
 
 @app.post("/api/chat/agent")
-async def agent_chat(request: AgentChatRequest) -> Dict[str, Any]:
+async def agent_chat(request: AgentChatRequest, user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
     """通用多智能体聊天端点 —— Phase 1：服务端 LLM 代理（API Key 仅存服务端）。
 
+    需登录鉴权（chat/config 接口带 token）。未登录一律 401。
     客户端只传对话内容，不接触任何密钥；服务端以自身身份调用
     {base_url}/chat/completions，Authorization: Bearer <api_key>。
     （Phase 2 才接入真实 metagpt 流水线；此处替换原 metagpt stub 分支。）
@@ -1112,47 +1168,27 @@ async def agent_chat(request: AgentChatRequest) -> Dict[str, Any]:
 # Auth Endpoints
 # ====================================================================
 
-async def _get_current_user(request: Request) -> Optional[Dict[str, Any]]:
-    """从 Authorization header / 请求作用域解析当前用户（可选鉴权——匿名访问可继续）。"""
-    # 优先复用中间件已解析的 user_id（避免重复查库）
-    uid = getattr(request.state, "user_id", None)
-    if uid is None:
-        auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
-            return None
-        token_str = auth[len("Bearer "):].strip()
-        if not token_str:
-            return None
-        async with get_async_session() as session:
-            user = await UserRepository(session).get_user_by_token(token_str)
-            if not user:
-                return None
-            uid = user.id
-    async with get_async_session() as session:
-        user = await UserRepository(session).get_by_id(uid)
-        if not user:
-            return None
-        return {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-            "display_name": user.display_name,
-            "avatar": user.avatar,
-            "created_at": user.created_at.isoformat() if user.created_at else "",
-        }
-
-
-async def _require_user(request: Request) -> Dict[str, Any]:
-    """强制鉴权——未登录则 401。"""
-    user = await _get_current_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="请先登录")
-    return user
+def _user_to_dict(u) -> Dict[str, Any]:
+    """序列化 User 为前端可用的安全字典。"""
+    return {
+        "id": u.id,
+        "username": u.username,
+        "email": u.email,
+        "display_name": u.display_name or u.username,
+        "avatar": u.avatar,
+        "created_at": u.created_at.isoformat() if u.created_at else "",
+        "last_login": u.last_login.isoformat() if u.last_login else "",
+    }
 
 
 @app.post("/api/auth/register")
 async def register(body: RegisterRequest) -> Dict[str, Any]:
     """注册新用户"""
+    # 输入校验
+    if not _USERNAME_RE.match(body.username):
+        raise HTTPException(status_code=400, detail="用户名只能包含字母、数字、下划线，长度 2-32")
+    if not _EMAIL_RE.match(body.email):
+        raise HTTPException(status_code=400, detail="邮箱格式不正确")
     async with get_async_session() as session:
         repo = UserRepository(session)
 
@@ -1192,6 +1228,7 @@ async def register(body: RegisterRequest) -> Dict[str, Any]:
             "email": user.email,
             "display_name": user.display_name or user.username,
             "avatar": user.avatar,
+            "last_login": user.last_login.isoformat() if user.last_login else "",
         },
         "token": token.token,
     }
@@ -1205,6 +1242,9 @@ async def login(body: LoginRequest) -> Dict[str, Any]:
         user = await repo.authenticate(body.username, body.password)
         if not user:
             raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+        # 刷新最后登录时间
+        await repo.update_last_login(user.id)
 
         # 生成 token：勾选「记住我」= 30 天长效，否则 24 小时
         ttl_hours = 24 * 30 if body.remember else 24
@@ -1222,6 +1262,7 @@ async def login(body: LoginRequest) -> Dict[str, Any]:
             "email": user.email,
             "display_name": user.display_name or user.username,
             "avatar": user.avatar,
+            "last_login": user.last_login.isoformat() if user.last_login else "",
         },
         "token": token.token,
     }
@@ -1255,6 +1296,45 @@ async def auth_me(user: Optional[Dict[str, Any]] = Depends(_get_current_user)) -
     if not user:
         return {"authenticated": False}
     return {"authenticated": True, "user": user}
+
+
+@app.get("/api/auth/profile")
+async def auth_profile(user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """获取当前登录用户的完整资料。"""
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+        u = await repo.get_by_id(user["id"])
+        if not u:
+            raise HTTPException(status_code=404, detail="用户不存在")
+    return {"status": "ok", "user": _user_to_dict(u)}
+
+
+@app.put("/api/auth/profile")
+async def update_profile(body: ProfileUpdateRequest,
+                         user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """更新显示名称 / 头像。"""
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+        u = await repo.update_profile(
+            user["id"],
+            display_name=body.display_name.strip() or None,
+            avatar=body.avatar or None,
+        )
+        if not u:
+            raise HTTPException(status_code=404, detail="用户不存在")
+    return {"status": "ok", "user": _user_to_dict(u)}
+
+
+@app.post("/api/auth/change-password")
+async def change_password(body: ChangePasswordRequest,
+                          user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """修改密码（需校验原密码）。"""
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+        ok = await repo.change_password(user["id"], body.old_password, body.new_password)
+        if not ok:
+            raise HTTPException(status_code=400, detail="原密码错误")
+    return {"status": "ok", "message": "密码已更新"}
 
 
 # ====================================================================
