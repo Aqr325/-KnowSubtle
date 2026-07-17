@@ -1,16 +1,29 @@
-name: Verify API (54-point suite)
+name: Verify API & Auth
 
-# 推送 main 或开 PR 时，自动启动后端（DEMO/离线模式）并跑 54 项端到端验证。
-# 任一功能失败 -> verify_all.py 以 exit(1) 退出 -> CI 标红，阻断合入。
+# 推送 main / 开 PR 时，自动启动后端（DEMO/离线模式）跑：
+#   1) verify_all.py  —— 54 项端到端功能验证（端口 8753）
+#   2) verify_live2.py —— 注册登录鉴权回归（源码 uvicorn，18 项）
+# 另设手动/打 tag 触发的 Windows 任务，构建冻结 exe 并跑 test_exe.py（18 项），
+# 确保打包后的二进制同样强制鉴权。任一验证失败 -> CI 标红，阻断合入。
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
+    name: Source API + auth (ubuntu)
     runs-on: ubuntu-latest
+    env:
+      METAGPT_STUBBED: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -22,26 +35,30 @@ jobs:
       - name: Install runtime deps (demo/stub mode, no real metagpt)
         run: |
           python -m pip install --upgrade pip
-          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings python-multipart
+          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings python-multipart pyyaml httpx openai
 
       - name: Start server + run 54-item verification
-        env:
-          METAGPT_STUBBED: "1"
         run: |
           set -e
           nohup python app.py > server.log 2>&1 &
           SRV=$!
           # 轮询等待 health 就绪（最多 60s）
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/api/health || true)
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8753/api/health || true)
             if [ "$code" = "200" ]; then echo "HEALTH_OK after ~${i}s"; break; fi
             sleep 1
           done
-          # 跑全套验证，保留退出码
-          python verify_all.py
+          # 跑全套验证（端口参数与 config.json 一致 = 8753），保留退出码
+          python verify_all.py http://127.0.0.1:8753
           RC=$?
           kill $SRV 2>/dev/null || true
           exit $RC
+
+      - name: Auth regression (verify_live2.py, self-contained)
+        run: |
+          pkill -f "uvicorn app:app" 2>/dev/null || true
+          sleep 1
+          python verify_live2.py
 
       - name: Upload server log on failure
         if: failure()
@@ -49,3 +66,38 @@ jobs:
         with:
           name: server-log
           path: server.log
+
+  verify-exe:
+    name: Frozen exe auth (windows, manual / tag)
+    runs-on: windows-latest
+    # 构建 exe 较重，仅手动触发或打 v* tag 时跑；推送 main 不自动跑以免烧分钟。
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build + runtime deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyqt6 pyinstaller
+          pip install fastapi uvicorn sqlalchemy aiosqlite pydantic pydantic-settings python-multipart pyyaml httpx openai
+        shell: bash
+
+      - name: Build KnowSubtle.exe
+        run: python build/build_exe.py
+        shell: bash
+
+      - name: Run exe auth smoke (test_exe.py)
+        run: python test_exe.py
+        shell: bash
+
+      - name: Upload exe stdout on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-stdout
+          path: .authtest/exe_stdout.log
