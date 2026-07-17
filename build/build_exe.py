@@ -34,7 +34,8 @@ args = [
     "--name=KnowSubtle",
     "--onedir",
     "--windowed",
-    f"--icon={ICO}",
+    # 图标缺失（例如 CI checkout 未提交 .ico）则跳过，PyInstaller 用默认图标，不影响构建/运行
+    *([f"--icon={ICO}"] if ICO.exists() else []),
     f"--distpath={DIST}",
     f"--workpath={ROOT / 'build' / 'work'}",
     f"--specpath={ROOT / 'build'}",
