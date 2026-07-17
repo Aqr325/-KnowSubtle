@@ -602,6 +602,25 @@ def _open_pyqt_window(port: int) -> str:
                 tray.setIcon(app.windowIcon())
             tray.setToolTip("KnowSubtle 学习宇宙")
             menu = QMenu()
+            # 当前渲染模式（只读标签；每次弹出菜单前实时刷新，反映 _RENDER_MODE_INFO）
+            act_mode = QAction("渲染模式：未知", app)
+            act_mode.setDisabled(True)
+            act_mode.setIconVisibleInMenu(False)
+
+            def _refresh_mode_label():
+                _info = _RENDER_MODE_INFO or ""
+                if _info:
+                    _name = _info.split(" | ", 1)[0]
+                    _flags = _info.split("flags=", 1)[1] if "flags=" in _info else ""
+                else:
+                    _name, _flags = "未知（极早期/无头？）", ""
+                act_mode.setText(f"渲染模式：{_name}")
+                if _flags:
+                    act_mode.setToolTip(f"Chromium flags: {_flags}")
+
+            menu.aboutToShow.connect(_refresh_mode_label)
+            menu.addAction(act_mode)
+            menu.addSeparator()
             act_show = QAction("显示窗口", app)
             act_quit = QAction("退出应用", app)
             menu.addAction(act_show)
