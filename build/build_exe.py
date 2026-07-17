@@ -34,7 +34,8 @@ args = [
     "--name=KnowSubtle",
     "--onedir",
     "--windowed",
-    f"--icon={ICO}",
+    # 图标缺失（例如 CI checkout 未提交 .ico）则跳过，PyInstaller 用默认图标，不影响构建/运行
+    *([f"--icon={ICO}"] if ICO.exists() else []),
     f"--distpath={DIST}",
     f"--workpath={ROOT / 'build' / 'work'}",
     f"--specpath={ROOT / 'build'}",
@@ -83,5 +84,6 @@ args = [
 
 if __name__ == "__main__":
     PyInstaller.__main__.run(args)
-    print(f"\n[OK] 构建完成，产物目录: {DIST}")
-    print(f"[提示] 运行前请确保 Release-Package/Resources/html 与 Resources/Config 已就位（由 NSIS 整体分发）。")
+    # 注意：输出只用 ASCII，避免 CI Windows 控制台(cp1252)打印中文时抛 UnicodeEncodeError
+    print(f"\n[OK] Build complete. Output dir: {DIST}")
+    print(f"[Note] Before running, ensure Release-Package/Resources/html and Resources/Config are in place (distributed via NSIS).")
