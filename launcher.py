@@ -340,25 +340,26 @@ def _open_pyqt_window(port: int) -> str:
         QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     except Exception:
         pass
-    # 渲染模式（权衡：流畅 vs 不闪）：
-    #  - 默认「GPU 光栅 + CPU 合成」：光栅走 GPU（滚动流畅），最终合成放 CPU（规避 Intel 集显
-    #    GPU 合成层的闪屏）。注意：dd1cfdc2 曾用纯 "--disable-gpu-compositing"（连光栅也走 CPU）
-    #    才导致极卡；本默认保留 --enable-gpu-rasterization，故流畅且不闪。
-    #  - KS_GPU_COMPOSITING=1：全 GPU（光栅+合成均 GPU），最流畅但个别集显会闪，按需开启。
-    #  - KS_SOFTWARE_RENDER=1 ：全软件渲染，最稳但最卡，仍闪时的兜底。
+    # 渲染模式（流畅优先；闪屏兜底）：
+    #  - 默认「全 GPU 合成」：光栅+合成均走 GPU。QWebEngineView 滚动掉帧的头号原因是
+    #    CPU 合成 + 每帧重采样，全 GPU 合成可根除上下滚动卡顿。保留
+    #    --disable-features=VizDisplayCompositor 缓解个别集显的显示合成器闪屏。
+    #  - KS_SOFTWARE_RENDER=1 ：全软件渲染，最稳但最卡，仅在 GPU 合成闪屏不可接受时兜底。
+    #  - KS_BALANCE=1 ：旧「GPU 光栅 + CPU 合成」模式（规避集显 GPU 合成层闪屏，但滚动不如全 GPU 流畅）。
     if os.environ.get("KS_SOFTWARE_RENDER"):
         _chromium_flags = (
             "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
             "--disable-features=VizDisplayCompositor"
         )
-    elif os.environ.get("KS_GPU_COMPOSITING"):
+    elif os.environ.get("KS_BALANCE"):
         _chromium_flags = (
-            "--enable-gpu-rasterization --enable-gpu-compositing "
+            "--enable-gpu-rasterization --disable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     else:
+        # 默认：全 GPU 合成（最流畅滚动）
         _chromium_flags = (
-            "--enable-gpu-rasterization --disable-gpu-compositing "
+            "--enable-gpu-rasterization --enable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags
@@ -459,6 +460,22 @@ def _open_pyqt_window(port: int) -> str:
             self._view = QWebEngineView()
             try:
                 self._view.page().setBackgroundColor(QColor(0x12, 0x0F, 0x17))
+            except Exception:
+                pass
+            # 硬件加速 & 平滑滚动：最大化 GPU 合成收益，根除 CPU 合成滚动卡顿
+            try:
+                from PyQt6.QtWebEngineCore import QWebEngineSettings
+                _s = QWebEngineSettings.defaultSettings()
+                for _attr in ("Accelerated2dCanvasEnabled", "WebGLEnabled", "ScrollAnimatorEnabled"):
+                    try:
+                        _s.setAttribute(getattr(QWebEngineSettings.WebAttribute, _attr), True)
+                    except Exception:
+                        pass
+                try:
+                    _s.setAttribute(QWebEngineSettings.WebAttribute.HardwareAccelerationPolicy,
+                                    QWebEngineSettings.HardwareAccelerationPolicy.Always)
+                except Exception:
+                    pass
             except Exception:
                 pass
             self._view.setStyleSheet(f"background-color:{_UI_BG};")
