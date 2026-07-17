@@ -12,12 +12,15 @@ import urllib.request
 import urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+AUTHTEST = os.path.join(HERE, ".authtest")
+os.makedirs(AUTHTEST, exist_ok=True)
 EXE = os.path.join(HERE, "Release-Package", "Core", "KnowSubtle", "KnowSubtle.exe")
 DB = os.path.join(HERE, ".authtest", "live_exe.db")
 if os.path.exists(DB):
     os.remove(DB)
-# Windows-style path required by frozen exe (POSIX /d/... crashes mkdir)
-DB_WIN = "D:/workbuddy workspace/2026-06-26-10-37-12/learning-agent-system/.authtest/live_exe.db"
+# Frozen exe needs a native Windows-style path (backslashes); derive from HERE
+# so it works locally and on CI Windows runners alike. POSIX /d/... paths crash mkdir.
+DB_WIN = os.path.abspath(DB)
 APPDATA_LOCAL = os.path.join(HERE, ".authtest", "appdata_exe")
 
 BASE = "http://127.0.0.1:8753"
