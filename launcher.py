@@ -458,9 +458,10 @@ def _open_diagnose_dialog(app, port: int) -> None:
     纯 Qt 控件，随时可点；信息为点击时实时探测，便于排查卡顿/白屏/闪屏。
     """
     from PyQt6.QtWidgets import (
-        QDialog, QVBoxLayout, QLabel, QTextEdit, QDialogButtonBox,
+        QDialog, QVBoxLayout, QLabel, QTextEdit, QDialogButtonBox, QMessageBox,
     )
     from PyQt6.QtCore import Qt
+    from datetime import datetime
 
     dlg = QDialog()
     dlg.setWindowTitle("KnowSubtle 诊断信息")
@@ -479,9 +480,14 @@ def _open_diagnose_dialog(app, port: int) -> None:
     )
     layout.addWidget(edit)
 
-    bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
-    bbox.button(QDialogButtonBox.StandardButton.Ok).setText("关闭")
-    bbox.accepted.connect(dlg.accept)
+    status = QLabel("")
+    status.setStyleSheet("color:#7FB0FF; font:11px 'Microsoft YaHei';")
+    layout.addWidget(status)
+
+    bbox = QDialogButtonBox()
+    btn_copy = bbox.addButton("复制全部", QDialogButtonBox.ButtonRole.ActionRole)
+    btn_close = bbox.addButton("关闭", QDialogButtonBox.ButtonRole.AcceptRole)
+    btn_close.clicked.connect(dlg.accept)
     layout.addWidget(bbox)
 
     # ---- 渲染 ----
@@ -517,7 +523,32 @@ def _open_diagnose_dialog(app, port: int) -> None:
     _lines.append(f"  Python   : {sys.executable}")
     _lines.append(f"  PID      : {os.getpid()}")
 
-    edit.setPlainText("\n".join(_lines))
+    _text = "\n".join(_lines)
+
+    # 自动落盘到 %APPDATA%/KnowSubtle/diagnose.txt，便于直接发送排查
+    try:
+        _dp = Path(os.environ.get("APPDATA", str(ROOT))) / "KnowSubtle" / "diagnose.txt"
+        _dp.parent.mkdir(parents=True, exist_ok=True)
+        _dp.write_text(
+            "KnowSubtle 诊断信息（生成于 "
+            + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + "）\n\n" + _text,
+            encoding="utf-8",
+        )
+        status.setText(f"已自动保存到：{_dp}")
+    except Exception as e:
+        status.setText(f"保存失败：{type(e).__name__}: {e}")
+
+    edit.setPlainText(_text)
+
+    def _copy_all():
+        try:
+            app.clipboard().setText(_text)
+            QMessageBox.information(dlg, "已复制", "诊断信息已复制到剪贴板。")
+        except Exception as e:
+            QMessageBox.warning(dlg, "复制失败", f"{type(e).__name__}: {e}")
+
+    btn_copy.clicked.connect(lambda checked=False: _copy_all())
+
     dlg.exec()
 
 
