@@ -1341,6 +1341,402 @@ async def change_password(body: ChangePasswordRequest,
 
 
 # ====================================================================
+# 个性化学习系统端点（功能 1-3：对话式画像 / 多智能体资源 / 路径与精准推送）
+# 真实 LLM 接口（Key 仅存服务端，复用 /api/config/llm 配置）
+# ====================================================================
+
+from learning_agent_system.database.repo import (
+    ProfileRepository, ResourceRepository, PathRepository, EvaluationRepository,
+)
+
+# ── 多智能体资源类型元数据（角色人设 + 默认交付格式）──
+RESOURCE_META: Dict[str, Dict[str, str]] = {
+    "EXPLANATION": {"label": "专业课程讲解", "agent": "讲解员 Rhea",
+                    "role": "你是一位严谨的学科讲解专家，善于把复杂概念拆解为清晰、循序渐进的讲解文档。",
+                    "format": "markdown"},
+    "MIND_MAP": {"label": "知识点思维导图", "agent": "脑图师 Kai",
+                 "role": "你是一位知识图谱与思维导图专家，善于用层级化结构梳理知识点之间的关联。",
+                 "format": "mermaid"},
+    "EXERCISE": {"label": "练习题目", "agent": "习题师 Eva",
+                 "role": "你是一位出题专家，善于根据知识点设计梯度合理、覆盖多种题型的练习题目。",
+                 "format": "markdown"},
+    "READING": {"label": "拓展阅读材料", "agent": "策展人 Plato",
+                "role": "你是一位学术阅读策展人，善于推荐并撰写高质量的拓展阅读材料导读。",
+                "format": "markdown"},
+    "CODE_EXAMPLE": {"label": "代码实操案例", "agent": "代码教练 Socrates",
+                     "role": "你是一位工程实践教练，善于提供可运行、注释清晰的代码实操案例。",
+                     "format": "code"},
+    "VIDEO_SCRIPT": {"label": "教学视频脚本", "agent": "导演 Mira",
+                     "role": "你是一位教学视频/动画导演，善于把知识点改写为分镜脚本（含画面、旁白、时长）。",
+                     "format": "markdown"},
+    "VISUAL_AID": {"label": "图解说明", "agent": "图解师 Lin",
+                   "role": "你是一位图解设计师，善于用结构化文字 + Mermaid/ASCII 描述直观的图解方案。",
+                   "format": "mermaid"},
+}
+ALL_RESOURCE_TYPES = list(RESOURCE_META.keys())
+
+
+async def call_llm(messages: List[Dict[str, Any]], *, temperature: float = 0.7,
+                   max_tokens: int = 2000, timeout: float = 90.0) -> str:
+    """统一的真实 LLM 调用（服务端代理，Key 仅存服务端）。
+
+    未配置 LLM 抛 RuntimeError("LLM_NOT_CONFIGURED")；上游错误抛 RuntimeError("LLM_UPSTREAM_ERROR:xxx")。
+    复用了 /api/chat/agent 的代理逻辑，但面向内部编排（不接触浏览器）。
+    """
+    cfg = load_llm_config()
+    if not cfg.get("base_url") or not cfg.get("model"):
+        raise RuntimeError("LLM_NOT_CONFIGURED")
+    payload = {"model": cfg["model"], "messages": messages, "temperature": temperature}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            f"{cfg['base_url'].rstrip('/')}/chat/completions", json=payload, headers=headers
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"LLM_UPSTREAM_ERROR:{resp.status_code}")
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+def _assert_llm_configured() -> None:
+    """未配置真实 LLM 时直接拒绝（与 /api/chat/agent 保持一致）。"""
+    cfg = load_llm_config()
+    if not cfg.get("base_url") or not cfg.get("model"):
+        raise HTTPException(
+            status_code=400,
+            detail="请先在设置中配置 LLM（base_url / api_key / model）",
+        )
+
+
+def parse_llm_json(text: Any) -> Dict[str, Any]:
+    """从 LLM 输出中稳健解析 JSON（兼容 ```json 代码围栏 / 前后多余文本）。"""
+    if not isinstance(text, str):
+        text = str(text)
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+    start, end = t.find("{"), t.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        t = t[start:end + 1]
+    return json.loads(t)
+
+
+def _profile_to_text(p: Dict[str, Any]) -> str:
+    """把画像字典转成注入 LLM 的紧凑文本。"""
+    lines = [
+        f"姓名: {p.get('name') or '（未提供）'}",
+        f"知识基础: {p.get('knowledge_base') or {}}",
+        f"认知风格: {p.get('cognitive_style') or '未知'}",
+        f"易错点偏好: {p.get('error_preferences') or []}",
+        f"学习目标: {p.get('learning_goals') or []}",
+        f"兴趣领域: {p.get('interests') or []}",
+        f"优势: {p.get('strengths') or []}",
+        f"薄弱点: {p.get('weaknesses') or []}",
+        f"学习节奏: {p.get('preferred_pace') or 'normal'}",
+        f"学习动机: {p.get('motivation') or '未知'}",
+        f"每周可用时间: {p.get('available_hours_per_week') or 0} 小时",
+    ]
+    return "\n".join(lines)
+
+
+def _merge_profile(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
+    """增量合并：字典字段合并；列表字段取并集去重；标量取新值（有则覆盖，否则保留旧）。"""
+    merged = dict(old)
+    list_fields = ("error_preferences", "learning_goals", "interests", "strengths", "weaknesses")
+    for k, v in (new or {}).items():
+        if v is None:
+            continue
+        if k in list_fields and isinstance(v, list):
+            base = list(old.get(k) or [])
+            for item in v:
+                if item not in base:
+                    base.append(item)
+            merged[k] = base
+        elif k == "knowledge_base" and isinstance(v, dict):
+            base = dict(old.get(k) or {})
+            base.update({kk: float(vv) for kk, vv in v.items()})
+            merged[k] = base
+        else:
+            merged[k] = v
+    return merged
+
+
+# ── 请求模型 ──
+class ProfileConverseRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    history: list = []
+
+
+class ResourceGenerateRequest(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=128)
+    topic: str = Field("", max_length=512)
+    focus: str = Field("", max_length=512)
+    resource_types: List[str] = []
+    per_type: int = Field(1, ge=1, le=3)
+
+
+class PathPlanRequest(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=128)
+    goals: List[str] = []
+    duration_weeks: int = Field(8, ge=1, le=52)
+
+
+class EvaluationCreateRequest(BaseModel):
+    dimension: str = Field(..., min_length=1, max_length=64)
+    score: float = Field(0.0, ge=0.0, le=100.0)
+    detail: str = Field("", max_length=2000)
+
+
+# ── 端点 ──
+
+@app.get("/api/profile")
+async def get_profile(user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """获取当前用户的对话式学习画像（未构建则返回 null）。"""
+    async with get_async_session() as session:
+        p = await ProfileRepository(session).get()
+        data = ProfileRepository.to_dict(p) if p else None
+    return {"profile": data}
+
+
+@app.post("/api/profile/converse")
+async def profile_converse(body: ProfileConverseRequest,
+                           user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """自然语言对话 → 真实 LLM 抽取 ≥6 维结构化画像 → 增量合并 → 持久化（随学随新）。"""
+    async with get_async_session() as session:
+        repo = ProfileRepository(session)
+        existing = ProfileRepository.to_dict(await repo.get_or_create())
+    _assert_llm_configured()
+    try:
+        system = (
+            "你是一位学习者画像构建助手。请根据用户的自然语言，抽取结构化学习画像并以 JSON 返回。\n"
+            "字段说明：\n"
+            "  name: 姓名(字符串)\n"
+            "  knowledge_base: 对象，学科名 -> 自评掌握度(0~1 的数字)\n"
+            "  cognitive_style: 认知风格，取值 visual / auditory / read_write / kinaesthetic\n"
+            "  error_preferences: 数组，常错的题型或知识点\n"
+            "  learning_goals: 数组，学习目标\n"
+            "  interests: 数组，兴趣领域\n"
+            "  strengths: 数组，优势\n"
+            "  weaknesses: 数组，薄弱点\n"
+            "  preferred_pace: 学习节奏 slow / normal / fast\n"
+            "  motivation: 学习动机(字符串)\n"
+            "  available_hours_per_week: 每周可用学习时间(数字，小时)\n"
+            "规则：\n"
+            "  1) 只返回 JSON，不要额外解释；\n"
+            "  2) 整体结构为 {\"profile\": {上述字段}, \"reply\": \"一句中文确认你更新了哪些内容(≤40字)\"}；\n"
+            "  3) 用户未提及的字段，请从『现有画像』继承原值，不要清空；\n"
+            "  4) 列表字段可追加新条目，保留旧条目。\n"
+            f"现有画像：\n{json.dumps(existing, ensure_ascii=False)}"
+        )
+        user_msg = f"用户说：{body.message}"
+        out = await call_llm(
+            [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
+            temperature=0.3, max_tokens=1200,
+        )
+        parsed = parse_llm_json(out)
+    except RuntimeError as e:
+        if "LLM_NOT_CONFIGURED" in str(e):
+            return JSONResponse(status_code=400, content={"detail": "请先在设置中配置 LLM（base_url / api_key / model）"})
+        return JSONResponse(status_code=502, content={"detail": f"LLM 服务错误：{e}"})
+    except Exception as e:
+        logger.error("画像抽取失败: %s", e)
+        return JSONResponse(status_code=502, content={"detail": "画像抽取失败，请稍后重试。"})
+
+    raw_profile = parsed.get("profile") if isinstance(parsed, dict) and "profile" in parsed else parsed
+    reply = parsed.get("reply", "") if isinstance(parsed, dict) else ""
+    if not isinstance(raw_profile, dict):
+        raw_profile = {}
+    merged = _merge_profile(existing, raw_profile)
+
+    history = list(existing.get("conversation_history") or [])
+    history.append({"role": "user", "content": body.message})
+    history.append({"role": "assistant", "content": reply or "（已更新画像）"})
+
+    async with get_async_session() as session:
+        updated = await ProfileRepository(session).update(merged, history)
+    return {"profile": updated, "reply": reply}
+
+
+@app.get("/api/resources")
+async def list_resources(resource_type: str = "", subject: str = "",
+                        user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """列出当前用户的个性化资源库（可按类型/学科过滤）。"""
+    async with get_async_session() as session:
+        items = await ResourceRepository(session).list(resource_type or None, subject or None)
+    return {"resources": items}
+
+
+@app.delete("/api/resources/{rid}")
+async def delete_resource(rid: int, user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """删除一条资源。"""
+    async with get_async_session() as session:
+        ok = await ResourceRepository(session).delete(rid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="资源不存在")
+    return {"ok": True}
+
+
+@app.post("/api/resources/generate")
+async def resources_generate(body: ResourceGenerateRequest,
+                            user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """多智能体协同生成个性化资源：为每个请求的类型派遣对应角色智能体（真实 LLM）。"""
+    async with get_async_session() as session:
+        prof = ProfileRepository.to_dict(await ProfileRepository(session).get_or_create())
+    types = [t for t in (body.resource_types or ALL_RESOURCE_TYPES) if t in RESOURCE_META]
+    if not types:
+        types = ALL_RESOURCE_TYPES
+    profile_text = _profile_to_text(prof)
+    _assert_llm_configured()
+
+    async def _gen_one(rtype: str, idx: int) -> Dict[str, Any]:
+        meta = RESOURCE_META[rtype]
+        system = (
+            f"你是「{meta['agent']}」，{meta['role']}\n"
+            f"请针对给定主题生成一份「{meta['label']}」。\n"
+            "直接返回 JSON：{\"title\": 标题, \"summary\": 一句话简介, \"content\": 完整正文}。\n"
+            "正文格式：讲解/练习/阅读/视频脚本用 Markdown；代码案例用 ```语言 代码块；思维导图/图解用 Mermaid 代码块。\n"
+            "不要包含额外解释，只返回 JSON。"
+        )
+        user_msg = (
+            f"学科/主题：{body.subject}\n"
+            f"细分知识点：{body.topic or '（由你根据主题合理拆解）'}\n"
+            f"学生需求/薄弱点：{body.focus or '无'}\n"
+            f"学习者画像：\n{profile_text}"
+        )
+        try:
+            out = await call_llm(
+                [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
+                temperature=0.85, max_tokens=2500,
+            )
+            parsed = parse_llm_json(out)
+            if not isinstance(parsed, dict):
+                raise ValueError("返回非 JSON 对象")
+            return {
+                "resource_type": rtype, "title": parsed.get("title", f"{meta['label']}：{body.subject}"),
+                "summary": parsed.get("summary", ""), "content": parsed.get("content", ""),
+                "format": meta["format"], "source_agent": meta["agent"], "subject": body.subject,
+                "difficulty": 1, "ok": True,
+            }
+        except Exception as e:
+            logger.warning("资源生成失败 %s: %s", rtype, e)
+            return {
+                "resource_type": rtype, "title": f"生成失败（{meta['label']}）", "summary": str(e)[:200],
+                "content": "", "format": meta["format"], "source_agent": meta["agent"],
+                "subject": body.subject, "difficulty": 1, "ok": False,
+            }
+
+    tasks = []
+    for rtype in types:
+        for i in range(max(1, body.per_type)):
+            tasks.append(_gen_one(rtype, i))
+    results = await asyncio.gather(*tasks)
+
+    created, errors = [], []
+    async with get_async_session() as session:
+        repo = ResourceRepository(session)
+        for r in results:
+            if r.get("ok"):
+                created.append(await repo.add(
+                    resource_type=r["resource_type"], title=r["title"], summary=r["summary"],
+                    content=r["content"], format=r["format"], source_agent=r["source_agent"],
+                    subject=r["subject"], difficulty=r["difficulty"],
+                ))
+            else:
+                errors.append({"resource_type": r["resource_type"], "title": r["title"], "summary": r["summary"]})
+    return {"resources": created, "errors": errors, "generated": len(created)}
+
+
+@app.post("/api/path/plan")
+async def path_plan(body: PathPlanRequest,
+                   user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """依托多智能体协同机制，结合画像与已有资源，规划科学、动态、有序的个性化学习路径。"""
+    async with get_async_session() as session:
+        prof = ProfileRepository.to_dict(await ProfileRepository(session).get_or_create())
+        resources = await ResourceRepository(session).list(subject=body.subject, limit=50)
+    profile_text = _profile_to_text(prof)
+    resources_text = "\n".join(
+        [f"- [{r['resource_type']}] {r['title']} (id={r['id']})" for r in resources]
+    ) or "（暂无资源，请先生成）"
+    _assert_llm_configured()
+
+    system = (
+        "你是「规划师 Plato」，善于制定科学、动态、有序的个性化学习路径。\n"
+        "请输出 JSON：{\"title\": 路径标题, \"description\": 概述, "
+        "\"milestones\": [ {\"title\": 阶段名, \"description\": 说明, \"resource_types\": [资源类型], "
+        "\"est_hours\": 预计学时(数字), \"week\": 周次} ]}。\n"
+        "要求：milestones 按学习顺序从易到难排列，覆盖用户目标与薄弱点；可引用已有资源类型。"
+        "只返回 JSON，不要额外解释。"
+    )
+    user_msg = (
+        f"学科：{body.subject}\n"
+        f"学习目标：{', '.join(body.goals) or '（由你根据学科合理设定）'}\n"
+        f"计划周期：{body.duration_weeks} 周\n"
+        f"学习者画像：\n{profile_text}\n"
+        f"已有资源：\n{resources_text}"
+    )
+    try:
+        out = await call_llm(
+            [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
+            temperature=0.5, max_tokens=2500,
+        )
+        parsed = parse_llm_json(out)
+        if not isinstance(parsed, dict):
+            raise ValueError("返回非 JSON 对象")
+    except RuntimeError as e:
+        if "LLM_NOT_CONFIGURED" in str(e):
+            return JSONResponse(status_code=400, content={"detail": "请先在设置中配置 LLM（base_url / api_key / model）"})
+        return JSONResponse(status_code=502, content={"detail": f"LLM 服务错误：{e}"})
+    except Exception as e:
+        logger.error("路径规划失败: %s", e)
+        return JSONResponse(status_code=502, content={"detail": "路径规划失败，请稍后重试。"})
+
+    milestones = parsed.get("milestones", []) if isinstance(parsed, dict) else []
+    async with get_async_session() as session:
+        path = await PathRepository(session).create(
+            body.subject, parsed.get("title", f"{body.subject} 学习路径"),
+            parsed.get("description", ""), milestones,
+        )
+    return {"path": path}
+
+
+@app.get("/api/path")
+async def get_path(user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """获取当前用户最新的一条学习路径。"""
+    async with get_async_session() as session:
+        p = await PathRepository(session).get_latest()
+    return {"path": p}
+
+
+@app.get("/api/recommendations")
+async def get_recommendations(user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """基于画像（薄弱点/兴趣/学科）对已有资源做精准匹配推送。"""
+    async with get_async_session() as session:
+        prof = ProfileRepository.to_dict(await ProfileRepository(session).get_or_create())
+        recs = await ResourceRepository(session).recommend_for(prof)
+    return {"recommendations": recs}
+
+
+@app.post("/api/evaluation")
+async def create_evaluation(body: EvaluationCreateRequest,
+                           user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """记录一条学习效果评估（功能 5 数据落地，供后续自适应策略使用）。"""
+    async with get_async_session() as session:
+        rec = await EvaluationRepository(session).add(body.dimension, body.score, body.detail)
+    return {"evaluation": rec}
+
+
+@app.get("/api/evaluation")
+async def list_evaluations(user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
+    """列出当前用户最近的评估记录。"""
+    async with get_async_session() as session:
+        recs = await EvaluationRepository(session).list_recent()
+    return {"evaluations": recs}
+
+
+# ====================================================================
 # Stats / Dashboard Analytics Endpoint
 # ====================================================================
 
@@ -1633,6 +2029,18 @@ async def serve_profile():
     if not profile_path.exists():
         return JSONResponse({"error": "profile not found"}, status_code=404)
     return FileResponse(profile_path, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/learning.html")
+async def serve_learning():
+    learning_path = DASHBOARD_DIR / "learning.html"
+    if not learning_path.exists():
+        fallback = Path(__file__).parent / "dashboard" / "learning.html"
+        if fallback.exists():
+            learning_path = fallback
+    if not learning_path.exists():
+        return JSONResponse({"error": "learning not found"}, status_code=404)
+    return FileResponse(learning_path, headers={"Cache-Control": "no-cache"})
 
 
 def _smoke_paths():

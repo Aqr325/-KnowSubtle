@@ -389,3 +389,98 @@ class DailyGoal(Base):
     __table_args__ = (
         Index("uq_daily_goals_date_user", "date", "user_id", unique=True),
     )
+
+
+# ════════════════════════════════════════════
+# 个性化学习系统（功能 1-3：对话式画像 / 多智能体资源 / 路径与精准推送）
+# 全部为「用户级」表（user_id 外键隔离；与原有 session 级表解耦，向后兼容）
+# ════════════════════════════════════════════
+
+class StudentProfile(Base):
+    """对话式学习画像（用户级，≥6 维度，支持随学随新）。每个用户一条记录。"""
+    __tablename__ = "student_profiles"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    user_id: int = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+
+    # 维度 1：知识基础（学科 -> 自评掌握度 0-1）
+    knowledge_base: str = Column(Text, default="{}")
+    # 维度 2：认知风格
+    cognitive_style: str = Column(String(32), default="")
+    # 维度 3：易错点偏好
+    error_preferences: str = Column(Text, default="[]")
+    # 维度 4：学习目标
+    learning_goals: str = Column(Text, default="[]")
+    # 维度 5：兴趣领域
+    interests: str = Column(Text, default="[]")
+    # 维度 6：优势
+    strengths: str = Column(Text, default="[]")
+    # 维度 7：薄弱点
+    weaknesses: str = Column(Text, default="[]")
+    # 维度 8：学习节奏偏好
+    preferred_pace: str = Column(String(16), default="normal")
+    # 维度 9：学习动机
+    motivation: str = Column(String(32), default="")
+    # 维度 10：每周可用学习时间（小时）
+    available_hours_per_week: float = Column(Float, default=5.0)
+
+    name: str = Column(String(128), default="")
+    # 对话历史（支撑「随学随新」：保留历次自然语言交互，供增量抽取上下文）
+    conversation_history: str = Column(Text, default="[]")
+
+    created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
+    updated_at: datetime = Column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+    user: User = relationship("User")
+
+
+class ResourceItem(Base):
+    """多智能体生成的个性化资源（用户级资源库）。"""
+    __tablename__ = "resource_items"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    user_id: int = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    resource_type: str = Column(String(32), default="EXPLANATION", index=True)  # ResourceCategory 枚举值
+    title: str = Column(String(256), default="")
+    summary: str = Column(Text, default="")
+    content: str = Column(Text, default="")            # 正文（按 format 渲染）
+    format: str = Column(String(32), default="markdown")  # markdown / code / mermaid / text
+    tags: str = Column(Text, default="[]")             # JSON list
+    source_agent: str = Column(String(64), default="")  # 生成该资源的智能体角色名
+    subject: str = Column(String(128), default="", index=True)
+    difficulty: int = Column(Integer, default=1)
+
+    created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
+    user: User = relationship("User")
+
+
+class PersonalizedPath(Base):
+    """个性化学习路径（用户级，动态生成）。"""
+    __tablename__ = "personalized_paths"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    user_id: int = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    subject: str = Column(String(128), default="", index=True)
+    title: str = Column(String(256), default="")
+    description: str = Column(Text, default="")
+    milestones: str = Column(Text, default="[]")  # JSON list of milestone dicts
+
+    created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
+    user: User = relationship("User")
+
+
+class EvaluationRecord(Base):
+    """学习效果评估记录（用户级，支撑功能 5 自适应）。"""
+    __tablename__ = "evaluation_records"
+
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    user_id: int = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    dimension: str = Column(String(64), default="", index=True)  # 评估维度（如 知识掌握/学习投入/资源使用）
+    score: float = Column(Float, default=0.0)                   # 0-100
+    detail: str = Column(Text, default="")                      # 文字说明
+
+    created_at: datetime = Column(DateTime, default=datetime.now, nullable=False)
+    user: User = relationship("User")

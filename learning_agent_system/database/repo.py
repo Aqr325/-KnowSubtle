@@ -25,6 +25,7 @@ from .models import (
     ExerciseResult, Achievement, MistakeRecord, KnowledgeDecay,
     StudyStreak, MultiGoalProgress, Vocab, DailyStats, DailyWords,
     DailyAccuracy, DailyGoal, User, AuthToken,
+    StudentProfile, ResourceItem, PersonalizedPath, EvaluationRecord,
 )
 
 logger = logging.getLogger("db.repo")
@@ -965,3 +966,274 @@ class UserRepository:
         user.password_salt = pw_salt
         await self.s.commit()
         return True
+
+
+# ════════════════════════════════════════════
+# 个性化学习系统 Repository（功能 1-3，全部按用户隔离）
+# ════════════════════════════════════════════
+
+class ProfileRepository:
+    """对话式学习画像（用户级，每个用户一条）。"""
+
+    def __init__(self, session: AsyncSession, user_id=_UNSET):
+        self._session = session
+        self._user_id = _resolve_user_id(user_id)
+
+    def _user_filter(self):
+        if self._user_id is None:
+            return [StudentProfile.user_id.is_(None)]
+        return [StudentProfile.user_id == self._user_id]
+
+    @staticmethod
+    def to_dict(p: StudentProfile) -> Dict[str, Any]:
+        """ORM -> 前端友好的 dict（解析所有 JSON 列）。"""
+        return {
+            "id": p.id,
+            "user_id": p.user_id,
+            "name": p.name,
+            "knowledge_base": _json_load(p.knowledge_base, {}),
+            "cognitive_style": p.cognitive_style,
+            "error_preferences": _json_load(p.error_preferences, []),
+            "learning_goals": _json_load(p.learning_goals, []),
+            "interests": _json_load(p.interests, []),
+            "strengths": _json_load(p.strengths, []),
+            "weaknesses": _json_load(p.weaknesses, []),
+            "preferred_pace": p.preferred_pace,
+            "motivation": p.motivation,
+            "available_hours_per_week": p.available_hours_per_week,
+            "conversation_history": _json_load(p.conversation_history, []),
+            "created_at": p.created_at.isoformat() if p.created_at else "",
+            "updated_at": p.updated_at.isoformat() if p.updated_at else "",
+        }
+
+    async def get(self) -> Optional[StudentProfile]:
+        result = await self._session.execute(
+            select(StudentProfile).where(*self._user_filter())
+        )
+        return result.scalar_one_or_none()
+
+    async def get_or_create(self) -> StudentProfile:
+        p = await self.get()
+        if p is None:
+            p = StudentProfile(user_id=self._user_id)
+            self._session.add(p)
+            await self._session.commit()
+            await self._session.refresh(p)
+        return p
+
+    async def update(self, data: Dict[str, Any], conversation_history: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """用合并后的完整画像字典 upsert 当前用户画像，并写入对话历史。"""
+        p = await self.get_or_create()
+        p.name = data.get("name", p.name) or ""
+        p.knowledge_base = _json_dump(data.get("knowledge_base", _json_load(p.knowledge_base, {})))
+        p.cognitive_style = data.get("cognitive_style", p.cognitive_style) or ""
+        p.error_preferences = _json_dump(data.get("error_preferences", _json_load(p.error_preferences, [])))
+        p.learning_goals = _json_dump(data.get("learning_goals", _json_load(p.learning_goals, [])))
+        p.interests = _json_dump(data.get("interests", _json_load(p.interests, [])))
+        p.strengths = _json_dump(data.get("strengths", _json_load(p.strengths, [])))
+        p.weaknesses = _json_dump(data.get("weaknesses", _json_load(p.weaknesses, [])))
+        p.preferred_pace = data.get("preferred_pace", p.preferred_pace) or "normal"
+        p.motivation = data.get("motivation", p.motivation) or ""
+        p.available_hours_per_week = float(data.get("available_hours_per_week", p.available_hours_per_week) or 0.0)
+        p.conversation_history = _json_dump(conversation_history)
+        p.updated_at = datetime.now()
+        await self._session.commit()
+        await self._session.refresh(p)
+        return self.to_dict(p)
+
+
+class ResourceRepository:
+    """多智能体资源库（用户级）。"""
+
+    def __init__(self, session: AsyncSession, user_id=_UNSET):
+        self._session = session
+        self._user_id = _resolve_user_id(user_id)
+
+    def _user_filter(self):
+        if self._user_id is None:
+            return [ResourceItem.user_id.is_(None)]
+        return [ResourceItem.user_id == self._user_id]
+
+    @staticmethod
+    def to_dict(r: ResourceItem) -> Dict[str, Any]:
+        return {
+            "id": r.id,
+            "user_id": r.user_id,
+            "resource_type": r.resource_type,
+            "title": r.title,
+            "summary": r.summary,
+            "content": r.content,
+            "format": r.format,
+            "tags": _json_load(r.tags, []),
+            "source_agent": r.source_agent,
+            "subject": r.subject,
+            "difficulty": r.difficulty,
+            "created_at": r.created_at.isoformat() if r.created_at else "",
+        }
+
+    async def add(self, resource_type: str, title: str, summary: str, content: str,
+                  format: str = "markdown", tags: List[str] = None,
+                  source_agent: str = "", subject: str = "", difficulty: int = 1) -> Dict[str, Any]:
+        r = ResourceItem(
+            user_id=self._user_id,
+            resource_type=resource_type,
+            title=title,
+            summary=summary,
+            content=content,
+            format=format,
+            tags=_json_dump(tags or []),
+            source_agent=source_agent,
+            subject=subject,
+            difficulty=difficulty,
+        )
+        self._session.add(r)
+        await self._session.commit()
+        await self._session.refresh(r)
+        return self.to_dict(r)
+
+    async def list(self, resource_type: Optional[str] = None, subject: Optional[str] = None,
+                   limit: int = 200) -> List[Dict[str, Any]]:
+        conds = self._user_filter()
+        if resource_type:
+            conds.append(ResourceItem.resource_type == resource_type)
+        if subject:
+            conds.append(ResourceItem.subject == subject)
+        result = await self._session.execute(
+            select(ResourceItem).where(*conds).order_by(ResourceItem.created_at.desc()).limit(limit)
+        )
+        return [self.to_dict(r) for r in result.scalars().all()]
+
+    async def get_by_id(self, rid: int) -> Optional[Dict[str, Any]]:
+        r = await self._session.scalar(select(ResourceItem).where(*self._user_filter(), ResourceItem.id == rid))
+        return self.to_dict(r) if r else None
+
+    async def delete(self, rid: int) -> bool:
+        r = await self._session.scalar(select(ResourceItem).where(*self._user_filter(), ResourceItem.id == rid))
+        if not r:
+            return False
+        await self._session.delete(r)
+        await self._session.commit()
+        return True
+
+    async def recommend_for(self, profile: Dict[str, Any], limit: int = 12) -> List[Dict[str, Any]]:
+        """基于画像（薄弱点/兴趣/学科）对已有资源做精准匹配打分，返回 Top-N。"""
+        items = await self.list(limit=500)
+        if not items:
+            return []
+        kb = profile.get("knowledge_base") or {}
+        subjects = set(str(k) for k in kb.keys()) if isinstance(kb, dict) else set()
+        weaknesses = set(w.lower() for w in (profile.get("weaknesses") or []))
+        interests = set(i.lower() for i in (profile.get("interests") or []))
+        goals = set(g.lower() for g in (profile.get("learning_goals") or []))
+
+        def _score(it: Dict[str, Any]) -> int:
+            s = 0
+            subj = (it.get("subject") or "").lower()
+            if subj in subjects:
+                s += 3
+            blob = " ".join([
+                it.get("title", ""), it.get("summary", ""),
+                " ".join(it.get("tags") or []), subj
+            ]).lower()
+            for w in weaknesses:
+                if w and w in blob:
+                    s += 4
+            for g in goals:
+                if g and g in blob:
+                    s += 2
+            for i in interests:
+                if i and i in blob:
+                    s += 1
+            return s
+
+        scored = [( _score(it), it ) for it in items]
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [it for _, it in scored[:limit] if _ > 0] or [it for _, it in scored[:limit]]
+
+
+class PathRepository:
+    """个性化学习路径（用户级）。"""
+
+    def __init__(self, session: AsyncSession, user_id=_UNSET):
+        self._session = session
+        self._user_id = _resolve_user_id(user_id)
+
+    def _user_filter(self):
+        if self._user_id is None:
+            return [PersonalizedPath.user_id.is_(None)]
+        return [PersonalizedPath.user_id == self._user_id]
+
+    @staticmethod
+    def to_dict(p: PersonalizedPath) -> Dict[str, Any]:
+        return {
+            "id": p.id,
+            "user_id": p.user_id,
+            "subject": p.subject,
+            "title": p.title,
+            "description": p.description,
+            "milestones": _json_load(p.milestones, []),
+            "created_at": p.created_at.isoformat() if p.created_at else "",
+        }
+
+    async def create(self, subject: str, title: str, description: str,
+                     milestones: List[Dict[str, Any]]) -> Dict[str, Any]:
+        p = PersonalizedPath(
+            user_id=self._user_id,
+            subject=subject,
+            title=title,
+            description=description,
+            milestones=_json_dump(milestones),
+        )
+        self._session.add(p)
+        await self._session.commit()
+        await self._session.refresh(p)
+        return self.to_dict(p)
+
+    async def get_latest(self) -> Optional[Dict[str, Any]]:
+        result = await self._session.execute(
+            select(PersonalizedPath).where(*self._user_filter()).order_by(PersonalizedPath.created_at.desc()).limit(1)
+        )
+        p = result.scalar_one_or_none()
+        return self.to_dict(p) if p else None
+
+    async def list(self, limit: int = 10) -> List[Dict[str, Any]]:
+        result = await self._session.execute(
+            select(PersonalizedPath).where(*self._user_filter()).order_by(PersonalizedPath.created_at.desc()).limit(limit)
+        )
+        return [self.to_dict(p) for p in result.scalars().all()]
+
+
+class EvaluationRepository:
+    """学习效果评估记录（用户级）。"""
+
+    def __init__(self, session: AsyncSession, user_id=_UNSET):
+        self._session = session
+        self._user_id = _resolve_user_id(user_id)
+
+    def _user_filter(self):
+        if self._user_id is None:
+            return [EvaluationRecord.user_id.is_(None)]
+        return [EvaluationRecord.user_id == self._user_id]
+
+    @staticmethod
+    def to_dict(e: EvaluationRecord) -> Dict[str, Any]:
+        return {
+            "id": e.id,
+            "dimension": e.dimension,
+            "score": e.score,
+            "detail": e.detail,
+            "created_at": e.created_at.isoformat() if e.created_at else "",
+        }
+
+    async def add(self, dimension: str, score: float, detail: str = "") -> Dict[str, Any]:
+        e = EvaluationRecord(user_id=self._user_id, dimension=dimension, score=float(score), detail=detail)
+        self._session.add(e)
+        await self._session.commit()
+        await self._session.refresh(e)
+        return self.to_dict(e)
+
+    async def list_recent(self, limit: int = 30) -> List[Dict[str, Any]]:
+        result = await self._session.execute(
+            select(EvaluationRecord).where(*self._user_filter()).order_by(EvaluationRecord.created_at.desc()).limit(limit)
+        )
+        return [self.to_dict(e) for e in result.scalars().all()]
