@@ -340,6 +340,31 @@ def _resolve_app_icon():
     return None
 
 
+def _detect_gpu_tier() -> str:
+    """粗略探测显卡档位，用于首启引导「推荐」默认（非精确指纹，仅供参考）。
+
+    返回：
+      - 'intel'    ：Intel 集成显卡（历史上易与 DWM 冲突闪屏，推荐平衡模式）
+      - 'discrete' ：独显（NVIDIA/AMD/Intel Arc 等，倾向推荐全 GPU 合成）
+      - 'unknown'  ：探测失败 / 非 Windows / 无明确特征
+    失败一律返回 'unknown'，不影响引导正常弹出。
+    """
+    try:
+        if sys.platform.startswith("win"):
+            _out = subprocess.run(
+                ["wmic", "path", "win32_VideoController", "get", "name"],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.lower()
+            if "intel" in _out:
+                # Intel Arc 是独显（命名含 'arc'），其余 Intel 多为集成显卡
+                return "discrete" if "arc" in _out else "intel"
+            if any(_k in _out for _k in ("nvidia", "geforce", "rtx", "radeon", "amd", "arc")):
+                return "discrete"
+    except Exception:
+        pass
+    return "unknown"
+
+
 def _first_launch_render_guide(app) -> str:
     """首次启动引导：让用户选择渲染模式，降低发现成本（而非藏在托盘右键）。
 
@@ -373,6 +398,15 @@ def _first_launch_render_guide(app) -> str:
     sub.setWordWrap(True)
     layout.addWidget(sub)
 
+    # 按机器显卡「指纹」推荐默认档位：独显倾向全 GPU 合成，Intel 集成/未知默认平衡
+    _gpu_tier = _detect_gpu_tier()
+    _recommend_key = "gpu" if _gpu_tier == "discrete" else "balance"
+    _tier_hint = {
+        "intel": "检测到 Intel 集成显卡，建议「平衡模式」以杜绝闪屏。",
+        "discrete": "检测到独立显卡，可放心尝试「全 GPU 合成」获得最丝滑滚动。",
+        "unknown": "未能识别显卡型号，已为你推荐稳妥的「平衡模式」。",
+    }.get(_gpu_tier, "")
+
     opts = [
         ("balance", "平衡模式（推荐 · 默认）",
          "GPU 光栅 + CPU 合成，稳定不闪、滚动流畅，适合绝大多数电脑。"),
@@ -383,13 +417,20 @@ def _first_launch_render_guide(app) -> str:
     ]
     group = QButtonGroup(dlg)
     for i, (key, t, d) in enumerate(opts):
+        _title = (f"{t}  ★推荐" if key == _recommend_key else t)
         rb = QRadioButton()
-        rb.setText(f"<b>{t}</b><br><span style='color:#8A90A6;'>{d}</span>")
+        rb.setText(f"<b>{_title}</b><br><span style='color:#8A90A6;'>{d}</span>")
         rb.setStyleSheet("font:12px 'Microsoft YaHei'; padding:5px;")
         group.addButton(rb, i)
-        if key == "balance":
+        if key == _recommend_key:
             rb.setChecked(True)
         layout.addWidget(rb)
+
+    if _tier_hint:
+        _hint = QLabel(_tier_hint)
+        _hint.setStyleSheet("color:#7FB0FF; font:11px 'Microsoft YaHei';")
+        _hint.setWordWrap(True)
+        layout.addWidget(_hint)
 
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
@@ -409,6 +450,75 @@ def _first_launch_render_guide(app) -> str:
             return opts[idx][0]
     # 稍后再说 / 取消 / 关闭：不写入偏好，下次启动仍弹出引导
     return "skip"
+
+
+def _open_diagnose_dialog(app, port: int) -> None:
+    """一键诊断面板：列出当前渲染 flags、Web 缓存、后端健康与运行时信息。
+
+    纯 Qt 控件，随时可点；信息为点击时实时探测，便于排查卡顿/白屏/闪屏。
+    """
+    from PyQt6.QtWidgets import (
+        QDialog, QVBoxLayout, QLabel, QTextEdit, QDialogButtonBox,
+    )
+    from PyQt6.QtCore import Qt
+
+    dlg = QDialog()
+    dlg.setWindowTitle("KnowSubtle 诊断信息")
+    dlg.setMinimumWidth(580)
+    dlg.setMinimumHeight(380)
+    dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+
+    layout = QVBoxLayout(dlg)
+    layout.setContentsMargins(18, 16, 18, 14)
+    layout.setSpacing(10)
+
+    edit = QTextEdit()
+    edit.setReadOnly(True)
+    edit.setStyleSheet(
+        "font:12px 'Consolas','Microsoft YaHei'; background:#15131F; color:#C8CFE0; border:none;"
+    )
+    layout.addWidget(edit)
+
+    bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+    bbox.button(QDialogButtonBox.StandardButton.Ok).setText("关闭")
+    bbox.accepted.connect(dlg.accept)
+    layout.addWidget(bbox)
+
+    # ---- 渲染 ----
+    _info = _RENDER_MODE_INFO or ""
+    _mode_name = _info.split(" | ", 1)[0] if _info else "未知（极早期/无头？）"
+    _flags = _info.split("flags=", 1)[1] if "flags=" in _info else "(无)"
+    _lines = ["【渲染模式】", f"  当前档位 : {_mode_name}", f"  Chromium flags : {_flags}",
+              f"  持久化偏好 : {_render_pref_path()}"]
+
+    # ---- Web 缓存 ----
+    _lines += ["", "【Web 缓存】"]
+    try:
+        from PyQt6.QtWebEngineCore import QWebEngineProfile
+        _p = QWebEngineProfile.defaultProfile()
+        _ct = {0: "无缓存", 1: "内存缓存", 2: "磁盘缓存"}.get(
+            int(_p.httpCacheType()), str(_p.httpCacheType()))
+        _lines.append(f"  缓存类型 : {_ct}")
+        _lines.append(f"  容量上限 : {_p.httpCacheMaximumSize() // (1024 * 1024)} MB")
+        _lines.append(f"  缓存路径 : {_p.cachePath() or '(默认)'}")
+    except Exception as e:
+        _lines.append(f"  缓存信息获取失败: {type(e).__name__}: {e}")
+
+    # ---- 后端健康 ----
+    _lines += ["", "【本地后端】"]
+    _health_url = f"http://127.0.0.1:{port}/api/health"
+    _up = _probe_url(_health_url, timeout=1.0)
+    _lines.append(f"  健康检查 {_health_url} : {'正常 ✅' if _up else '异常 ❌'}")
+    _lines.append(f"  服务端口 : {port}")
+
+    # ---- 运行时 ----
+    _lines += ["", "【运行时】"]
+    _lines.append(f"  Headless : {bool(os.environ.get('WC_HEADLESS'))}")
+    _lines.append(f"  Python   : {sys.executable}")
+    _lines.append(f"  PID      : {os.getpid()}")
+
+    edit.setPlainText("\n".join(_lines))
+    dlg.exec()
 
 
 def _open_pyqt_window(port: int) -> str:
@@ -659,8 +769,11 @@ def _open_pyqt_window(port: int) -> str:
             except Exception:
                 pass
             # 后端自愈重载：后端崩溃重启期间页面会报错，恢复后自动重载，避免停留在错误态
+            # 间隔可经 KS_BE_WATCHDOG_MS 覆盖（毫秒，默认 4000）
             self._be_watchdog = QTimer(self)
-            self._be_watchdog.setInterval(4000)
+            self._be_watchdog.setInterval(
+                max(500, int(os.environ.get("KS_BE_WATCHDOG_MS", "4000")))
+            )
             self._be_watchdog.timeout.connect(self._backend_watchdog)
             self._be_watchdog.start()
 
@@ -896,6 +1009,14 @@ def _open_pyqt_window(port: int) -> str:
 
             act_reset.triggered.connect(lambda checked=False: _reset_render_pref())
             menu.addAction(act_reset)
+
+            # 一键诊断面板：实时列出渲染 flags / 缓存 / 后端健康 / 运行时信息
+            act_diag = QAction("诊断信息", app)
+            act_diag.setIconVisibleInMenu(False)
+            act_diag.triggered.connect(
+                lambda checked=False, p=port: _open_diagnose_dialog(app, p)
+            )
+            menu.addAction(act_diag)
 
             menu.addSeparator()
             act_show = QAction("显示窗口", app)
