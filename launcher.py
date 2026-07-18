@@ -493,6 +493,17 @@ def _open_pyqt_window(port: int) -> str:
             "--enable-gpu-rasterization --disable-gpu-compositing "
             "--disable-features=VizDisplayCompositor"
         )
+    # 通用增强 flags（刻意不重新开启 GPU 合成，故不会复现集显闪屏）：
+    #  - 平滑滚动、关闭后台计时器/渲染进程/Occluded 窗口节流 → 滚动跟手、遮挡恢复不卡顿；
+    #  - 关闭 IPC 洪泛保护 → 长文本/大列表渲染更跟手。
+    _COMMON_FLAGS = (
+        " --enable-smooth-scrolling"
+        " --disable-background-timer-throttling"
+        " --disable-renderer-backgrounding"
+        " --disable-backgrounding-occluded-windows"
+        " --disable-ipc-flooding-protection"
+    )
+    _chromium_flags = (_chromium_flags + _COMMON_FLAGS).strip()
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _chromium_flags
     global _RENDER_MODE_INFO
     _RENDER_MODE_INFO = f"{_mode_name} | flags={_chromium_flags}"
@@ -612,6 +623,15 @@ def _open_pyqt_window(port: int) -> str:
                     pass
             except Exception:
                 pass
+            # 磁盘 HTTP 缓存：本地仪表盘资源（JS/CSS/字体）缓存到磁盘，
+            # 重载/二次打开瞬时完成，减少白屏等待、提升流畅度
+            try:
+                from PyQt6.QtWebEngineCore import QWebEngineProfile
+                _prof = QWebEngineProfile.defaultProfile()
+                _prof.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+                _prof.setHttpCacheMaximumSize(200 * 1024 * 1024)  # 200MB
+            except Exception:
+                pass
             self._view.setStyleSheet(f"background-color:{_UI_BG};")
             self._view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
             self._view.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -629,6 +649,20 @@ def _open_pyqt_window(port: int) -> str:
             self._splash.show()
             self._view.loadProgress.connect(self._on_progress)
             self._view.loadFinished.connect(self._on_loaded)
+            self._url = url
+            self._load_retries = 0
+            self._server_was_down = False
+            # 渲染进程崩溃自愈：Chromium 渲染子进程意外终止时自动重载，避免白屏/卡死
+            try:
+                from PyQt6.QtWebEngineCore import QWebEnginePage
+                self._view.page().renderProcessTerminated.connect(self._on_render_terminated)
+            except Exception:
+                pass
+            # 后端自愈重载：后端崩溃重启期间页面会报错，恢复后自动重载，避免停留在错误态
+            self._be_watchdog = QTimer(self)
+            self._be_watchdog.setInterval(4000)
+            self._be_watchdog.timeout.connect(self._backend_watchdog)
+            self._be_watchdog.start()
 
             _ico = _resolve_app_icon()
             if _ico:
@@ -644,12 +678,39 @@ def _open_pyqt_window(port: int) -> str:
             except Exception:
                 pass
 
+        def _safe_reload(self):
+            try:
+                self._view.reload()
+            except Exception:
+                pass
+
+        def _on_render_terminated(self, status, exit_code):
+            _log(f"Web 渲染进程异常终止(status={status}, code={exit_code})，自动重载页面。")
+            self._load_retries = 0
+            QTimer.singleShot(500, self._safe_reload)
+
+        def _backend_watchdog(self):
+            _up = _probe_url(self._url, timeout=1.0)
+            if _up:
+                if self._server_was_down:
+                    self._server_was_down = False
+                    _log("本地服务已恢复，自动重载页面。")
+                    self._safe_reload()
+            else:
+                self._server_was_down = True
+
         def _on_loaded(self, ok):
             try:
                 if ok:
+                    self._load_retries = 0
                     QTimer.singleShot(300, self._splash.hide)
                 else:
-                    self._splash.setText("加载失败，请检查本地服务是否运行。")
+                    self._load_retries += 1
+                    if self._load_retries <= 3:
+                        self._splash.setText(f"加载未成功，正在重试 ({self._load_retries}/3) …")
+                        QTimer.singleShot(800 * self._load_retries, self._safe_reload)
+                    else:
+                        self._splash.setText("加载失败，请检查本地服务是否运行。")
             except Exception:
                 pass
 
