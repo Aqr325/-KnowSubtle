@@ -2209,6 +2209,18 @@
     -webkit-backface-visibility: hidden;
     overscroll-behavior: contain;
   }
+  /* Offscreen list items: skip layout/paint until scrolled into view.
+     Biggest scroll-jank win for long chat/agent/vocab/task lists under any compositor. */
+  body.perf-mode .chat-message,
+  body.perf-mode .agent-card,
+  body.perf-mode .vocab-item,
+  body.perf-mode .task-item,
+  body.perf-mode .pomo-item,
+  body.perf-mode .notif-item,
+  body.perf-mode .config-section {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 88px;
+  }
   /* Replace frosted glass with near-solid backgrounds so text stays readable */
   body.perf-mode .glass,
   body.perf-mode .stat-card,
@@ -4309,9 +4321,15 @@
   function initBackToTop() {
     var btn = $('#backToTop');
     if (!btn) return;
+    var _btTick = false;
     window.addEventListener('scroll', function() {
-      btn.classList.toggle('show', window.scrollY > 400);
-    });
+      if (_btTick) return;
+      _btTick = true;
+      requestAnimationFrame(function() {
+        _btTick = false;
+        btn.classList.toggle('show', window.scrollY > 400);
+      });
+    }, { passive: true });
     btn.addEventListener('click', function() {
       window.scrollTo({ top: 0, behavior: 'smooth' });
     });

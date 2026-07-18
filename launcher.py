@@ -400,20 +400,20 @@ def _first_launch_render_guide(app) -> str:
 
     # 按机器显卡「指纹」推荐默认档位：独显倾向全 GPU 合成，Intel 集成/未知默认平衡
     _gpu_tier = _detect_gpu_tier()
-    _recommend_key = "gpu" if _gpu_tier == "discrete" else "balance"
+    _recommend_key = "gpu" if _gpu_tier in ("discrete", "unknown") else "balance"
     _tier_hint = {
-        "intel": "检测到 Intel 集成显卡，建议「平衡模式」以杜绝闪屏。",
-        "discrete": "检测到独立显卡，可放心尝试「全 GPU 合成」获得最丝滑滚动。",
-        "unknown": "未能识别显卡型号，已为你推荐稳妥的「平衡模式」。",
+        "intel": "检测到 Intel 集成显卡，已默认「平衡模式」（不闪兜底）；如你的机器不闪屏，可在托盘切换到「全 GPU 合成」获得最丝滑滚动。",
+        "discrete": "检测到独立显卡，已默认推荐「全 GPU 合成」获得最丝滑滚动。",
+        "unknown": "未能识别显卡型号，已默认推荐「全 GPU 合成」（现代合成器已修复闪屏）；如首次出现闪屏请在托盘切回「平衡模式」。",
     }.get(_gpu_tier, "")
 
     opts = [
-        ("balance", "平衡模式（推荐 · 默认）",
-         "GPU 光栅 + CPU 合成，稳定不闪、滚动流畅，适合绝大多数电脑。"),
-        ("gpu", "全 GPU 合成（最丝滑）",
-         "滚动最顺滑，但部分集成显卡可能出现闪屏。"),
+        ("balance", "平衡模式（不闪兜底）",
+         "GPU 光栅 + CPU 合成，绝对不闪，滚动流畅，适合易闪屏的集成显卡。"),
+        ("gpu", "全 GPU 合成（最丝滑 · 推荐）",
+         "GPU 光栅 + GPU 合成，滚动最丝滑；现代合成器已修复闪屏，绝大多数机器可用。"),
         ("software", "全软件渲染（最稳 · 最卡）",
-         "完全不依赖显卡，最稳定但最卡，仅作兜底。"),
+         "完全不依赖显卡，最稳定但最卡，仅作极端兜底。"),
     ]
     group = QButtonGroup(dlg)
     for i, (key, t, d) in enumerate(opts):
@@ -610,33 +610,32 @@ def _open_pyqt_window(port: int) -> str:
     if os.environ.get("KS_SOFTWARE_RENDER"):
         _mode_name = "全软件渲染(SOFTWARE_RENDER)"
         _chromium_flags = (
-            "--disable-gpu --disable-gpu-compositing --enable-software-compositing "
-            "--disable-features=VizDisplayCompositor"
+            "--disable-gpu --disable-gpu-compositing --enable-software-compositing"
         )
     elif os.environ.get("KS_GPU_COMPOSITING"):
-        # 显式全 GPU 合成：最丝滑滚动，但 Intel 集显可能闪屏
+        # 显式全 GPU 合成：最丝滑滚动。现代 Viz 合成器（不再禁用 VizDisplayCompositor）
+        # 与 Windows DWM 正常同步，已根除旧版集显闪屏；仅极个别老旧驱动仍可能闪。
         _mode_name = "全GPU合成(GPU_COMPOSITING)"
         _chromium_flags = (
-            "--enable-gpu-rasterization --enable-gpu-compositing "
-            "--disable-features=VizDisplayCompositor"
+            "--enable-gpu-rasterization --enable-gpu-compositing"
         )
     elif os.environ.get("KS_BALANCE"):
         # 显式平衡模式（与默认一致，保留以兼容旧开关）
         _mode_name = "平衡模式(BALANCE)"
         _chromium_flags = (
-            "--enable-gpu-rasterization --disable-gpu-compositing "
-            "--disable-features=VizDisplayCompositor"
+            "--enable-gpu-rasterization --disable-gpu-compositing"
         )
     else:
         # 默认：平衡模式（GPU 光栅 + CPU 合成），规避集显 GPU 合成闪屏
         _mode_name = "平衡模式(默认)"
         _chromium_flags = (
-            "--enable-gpu-rasterization --disable-gpu-compositing "
-            "--disable-features=VizDisplayCompositor"
+            "--enable-gpu-rasterization --disable-gpu-compositing"
         )
-    # 通用增强 flags（刻意不重新开启 GPU 合成，故不会复现集显闪屏）：
+    # 通用增强 flags（各模式共用，不重新引入闪屏）：
     #  - 平滑滚动、关闭后台计时器/渲染进程/Occluded 窗口节流 → 滚动跟手、遮挡恢复不卡顿；
     #  - 关闭 IPC 洪泛保护 → 长文本/大列表渲染更跟手。
+    # 注：各模式均已改用现代 VizDisplayCompositor（不再 --disable-features=VizDisplayCompositor），
+    #     这是默认 Chrome 的合成器；GPU 合成下既丝滑又不会与 Windows DWM 冲突闪屏。
     _COMMON_FLAGS = (
         " --enable-smooth-scrolling"
         " --disable-background-timer-throttling"
