@@ -2856,6 +2856,32 @@
 
 <!-- ── All JavaScript (preserved from original) ── -->
 <script>
+// === 全局错误边界（S5）：捕获未处理异常，避免白屏 ===
+function showErrorBanner(msg) {
+  try {
+    var b = document.getElementById('__err_banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = '__err_banner';
+      b.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:2147483647;background:#3a0d12;color:#ffd7d7;border:1px solid #7a1f29;padding:10px 14px;border-radius:8px;font:13px/1.5 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);max-height:40vh;overflow:auto';
+      (document.body || document.documentElement).appendChild(b);
+    }
+    var t = document.createElement('div');
+    t.style.cssText = 'margin:2px 0;white-space:pre-wrap;word-break:break-word';
+    t.textContent = '⚠ 运行出错：' + msg;
+    b.appendChild(t);
+  } catch (e) {}
+}
+window.addEventListener('error', function (e) {
+  var m = (e && e.message) ? e.message : ((e && e.error) ? String(e.error) : '未知错误');
+  showErrorBanner(m);
+  console.error('[global error]', e);
+});
+window.addEventListener('unhandledrejection', function (e) {
+  var r = (e && e.reason) ? e.reason : ((e && e.detail) ? e.detail : '');
+  showErrorBanner('Promise 未处理拒绝: ' + (r && r.message ? r.message : String(r)));
+  console.error('[unhandledrejection]', e);
+});
 (function() {
   // ── State ──
   var State = {
@@ -3054,11 +3080,16 @@
   function renderVocab(filter) {
     var list = $('#vocabList');
     if (!list) return;
+    if (!State || !Array.isArray(State.vocab)) {
+      list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dimmed)">暂无词汇数据</div>';
+      return;
+    }
     list.innerHTML = '';
     var f = State.vocabFilter || 'all';
     var q = (filter || '').toLowerCase();
     var subj = State.subject || 'main';
     var items = State.vocab.filter(function(v) {
+      if (!v || typeof v !== 'object') return false;
       if ((v.subject || 'main') !== subj) return false;
       if (f === 'mastered' && !v.mastered) return false;
       if (f === 'due' && v.mastered) return false;
@@ -3072,6 +3103,7 @@
     }
     var frag = document.createDocumentFragment();
     items.forEach(function(v) {
+      if (!v || typeof v !== 'object') return;
       var div = document.createElement('div');
       div.className = 'vocab-item' + (v.mastered ? ' mastered' : '');
       var ret = calcRetention(v);
@@ -4625,6 +4657,7 @@
 
   // Hide page loader
   window.addEventListener('load', function() {
+    try {
     var loader = document.getElementById('pageLoader');
     if (loader) {
       setTimeout(function() {
@@ -4633,6 +4666,10 @@
       setTimeout(function() {
         loader.style.display = 'none';
       }, 1500);
+    }
+    } catch (e) {
+      showErrorBanner('初始化失败: ' + (e && e.message || e));
+      console.error(e);
     }
   });
 

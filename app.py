@@ -150,6 +150,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=500, compresslevel=9)
+
 from fastapi.responses import JSONResponse
 from fastapi import Request
 
@@ -1603,7 +1606,7 @@ async def serve_dashboard():
         dashboard_path = Path(__file__).parent / "index.html"
     if not dashboard_path.exists():
         return JSONResponse({"error": "dashboard not found"}, status_code=404)
-    return FileResponse(dashboard_path)
+    return FileResponse(dashboard_path, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/landing.html")
@@ -1611,7 +1614,7 @@ async def serve_landing():
     landing_path = DASHBOARD_DIR / "landing.html"
     if not landing_path.exists():
         return JSONResponse({"error": "landing not found"}, status_code=404)
-    return FileResponse(landing_path)
+    return FileResponse(landing_path, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/index.html")
@@ -1629,7 +1632,7 @@ async def serve_profile():
             profile_path = fallback
     if not profile_path.exists():
         return JSONResponse({"error": "profile not found"}, status_code=404)
-    return FileResponse(profile_path)
+    return FileResponse(profile_path, headers={"Cache-Control": "no-cache"})
 
 
 def _smoke_paths():
