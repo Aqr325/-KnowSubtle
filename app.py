@@ -28,7 +28,7 @@ Personalized Resource Generation & Learning Multi-Agent System
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from typing import List, Dict, Any, Optional
 from functools import partial
 import asyncio
@@ -41,6 +41,7 @@ import httpx
 from pathlib import Path
 
 from learning_agent_system.orchestrator import TeamOrchestrator, Phase, SessionContext
+from learning_agent_system.moderation import check_input_safety, check_output_safety
 from pydantic import BaseModel, Field, field_validator
 
 from learning_agent_system.schema import (
@@ -1376,6 +1377,18 @@ RESOURCE_META: Dict[str, Dict[str, str]] = {
 ALL_RESOURCE_TYPES = list(RESOURCE_META.keys())
 
 
+# ── 防幻觉 / 安全相关常量 ──
+ANTI_HALLUCINATION = (
+    "仅基于用户已提供的信息与公认常识作答；对不确定内容明确说明『我不确定』；"
+    "涉及具体事实（定义/公式/年份/人物/数据）若无法确认，请加 [待核实] 标注；"
+    "不要编造引用、文献或来源链接；如用户请求代写考试答案或学术不端内容，应婉拒并引导正当学习。"
+)
+# 每个生成的资源 content 末尾追加的脚注（对话式 reply 不加，保持聊天自然）
+RESOURCE_FOOTNOTE = (
+    "\n\n---\n📌 提示：本内容由 AI 生成，关键知识点请结合教材或权威来源核实。"
+)
+
+
 async def call_llm(messages: List[Dict[str, Any]], *, temperature: float = 0.7,
                    max_tokens: int = 2000, timeout: float = 90.0) -> str:
     """统一的真实 LLM 调用（服务端代理，Key 仅存服务端）。
@@ -1398,6 +1411,70 @@ async def call_llm(messages: List[Dict[str, Any]], *, temperature: float = 0.7,
         raise RuntimeError(f"LLM_UPSTREAM_ERROR:{resp.status_code}")
     data = resp.json()
     return data["choices"][0]["message"]["content"]
+
+
+async def call_llm_stream(messages: List[Dict[str, Any]], *, temperature: float = 0.7,
+                          max_tokens: int = 2000, timeout: float = 120.0):
+    """call_llm 的流式变体：async generator，逐段 yield delta 文本(str)。
+
+    未配置 LLM 抛 RuntimeError("LLM_NOT_CONFIGURED")；上游错误(非 200)抛 RuntimeError("LLM_UPSTREAM_ERROR:xxx")。
+    容错：若上游返回非流式（无 data: 行，或忽略 stream 字段），退化为一次性拿
+    choices[0].message.content 并 yield 整段（保证前端不白屏）。
+    """
+    cfg = load_llm_config()
+    if not cfg.get("base_url") or not cfg.get("model"):
+        raise RuntimeError("LLM_NOT_CONFIGURED")
+    payload = {"model": cfg["model"], "messages": messages, "temperature": temperature, "stream": True}
+    if max_tokens:
+        payload["max_tokens"] = max_tokens
+    headers = {"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+        async with client.stream(
+            "POST", f"{cfg['base_url'].rstrip('/')}/chat/completions", json=payload, headers=headers
+        ) as resp:
+            if resp.status_code >= 400:
+                try:
+                    body_text = await resp.aread()
+                except Exception:
+                    body_text = b""
+                raise RuntimeError(f"LLM_UPSTREAM_ERROR:{resp.status_code}:{body_text[:500]!r}")
+
+            # 先按 SSE 逐行解析；缓冲所有行以备退化
+            lines: List[str] = []
+            async for line in resp.aiter_lines():
+                if line:
+                    lines.append(line)
+
+            saw_data = False
+            for line in lines:
+                if not line.startswith("data:"):
+                    continue
+                saw_data = True
+                data_str = line[len("data:"):].strip()
+                if data_str == "[DONE]":
+                    return
+                try:
+                    chunk = json.loads(data_str)
+                except Exception:
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = (choices[0].get("delta") or {})
+                content = delta.get("content")
+                if content:
+                    yield content
+
+            # 退化：上游忽略了 stream 字段，整段作为单个 JSON 返回
+            if not saw_data:
+                raw = "\n".join(lines).strip()
+                try:
+                    data = json.loads(raw)
+                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                    if content:
+                        yield content
+                except Exception as e:
+                    raise RuntimeError(f"LLM_UPSTREAM_ERROR:non-stream fallback failed: {e}")
 
 
 def _assert_llm_configured() -> None:
@@ -1462,6 +1539,80 @@ def _merge_profile(old: Dict[str, Any], new: Dict[str, Any]) -> Dict[str, Any]:
         else:
             merged[k] = v
     return merged
+
+
+def _sse(payload: Dict[str, Any]) -> str:
+    """把事件字典序列化为标准 SSE `data: ...` 帧。"""
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+
+async def _extract_and_merge_profile(existing: Dict[str, Any], message: str,
+                                     reply_text: str) -> Dict[str, Any]:
+    """复用原 profile_converse 的「LLM 抽 JSON → 合并 → 持久化」逻辑，返回全量画像 dict。"""
+    system = (
+        "你是一位学习者画像构建助手。请根据用户的自然语言，抽取结构化学习画像并以 JSON 返回。\n"
+        "字段说明：\n"
+        "  name: 姓名(字符串)\n"
+        "  knowledge_base: 对象，学科名 -> 自评掌握度(0~1 的数字)\n"
+        "  cognitive_style: 认知风格，取值 visual / auditory / read_write / kinaesthetic\n"
+        "  error_preferences: 数组，常错的题型或知识点\n"
+        "  learning_goals: 数组，学习目标\n"
+        "  interests: 数组，兴趣领域\n"
+        "  strengths: 数组，优势\n"
+        "  weaknesses: 数组，薄弱点\n"
+        "  preferred_pace: 学习节奏 slow / normal / fast\n"
+        "  motivation: 学习动机(字符串)\n"
+        "  available_hours_per_week: 每周可用学习时间(数字，小时)\n"
+        "规则：\n"
+        "  1) 只返回 JSON，不要额外解释；\n"
+        "  2) 整体结构为 {\"profile\": {上述字段}, \"reply\": \"一句中文确认你更新了哪些内容(≤40字)\"}；\n"
+        "  3) 用户未提及的字段，请从『现有画像』继承原值，不要清空；\n"
+        "  4) 列表字段可追加新条目，保留旧条目。\n"
+        f"现有画像：\n{json.dumps(existing, ensure_ascii=False)}"
+    )
+    out = await call_llm(
+        [{"role": "system", "content": system}, {"role": "user", "content": f"用户说：{message}"}],
+        temperature=0.3, max_tokens=1200,
+    )
+    parsed = parse_llm_json(out)
+    raw_profile = parsed.get("profile") if isinstance(parsed, dict) and "profile" in parsed else parsed
+    if not isinstance(raw_profile, dict):
+        raw_profile = {}
+    merged = _merge_profile(existing, raw_profile)
+    history = list(existing.get("conversation_history") or [])
+    history.append({"role": "user", "content": message})
+    history.append({"role": "assistant", "content": reply_text or "（已更新画像）"})
+    async with get_async_session() as session:
+        updated = await ProfileRepository(session).update(merged, history)
+    return updated
+
+
+async def _generate_resource_content(rtype: str, meta: Dict[str, str],
+                                     body: "ResourceGenerateRequest",
+                                     profile_text: str) -> Dict[str, Any]:
+    """生成单个资源（非流式），返回 {title, summary, content}。"""
+    system = (
+        f"你是「{meta['agent']}」，{meta['role']}\n"
+        f"请针对给定主题生成一份「{meta['label']}」。\n"
+        "直接返回 JSON：{\"title\": 标题, \"summary\": 一句话简介, \"content\": 完整正文}。\n"
+        "正文格式：讲解/练习/阅读/视频脚本用 Markdown；代码案例用 ```语言 代码块；思维导图/图解用 Mermaid 代码块。\n"
+        "不要包含额外解释，只返回 JSON。\n"
+        + ANTI_HALLUCINATION
+    )
+    user_msg = (
+        f"学科/主题：{body.subject}\n"
+        f"细分知识点：{body.topic or '（由你根据主题合理拆解）'}\n"
+        f"学生需求/薄弱点：{body.focus or '无'}\n"
+        f"学习者画像：\n{profile_text}"
+    )
+    out = await call_llm(
+        [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
+        temperature=0.85, max_tokens=2500,
+    )
+    parsed = parse_llm_json(out)
+    if not isinstance(parsed, dict):
+        raise ValueError("返回非 JSON 对象")
+    return parsed
 
 
 # ── 请求模型 ──
@@ -1560,6 +1711,77 @@ async def profile_converse(body: ProfileConverseRequest,
     return {"profile": updated, "reply": reply}
 
 
+@app.post("/api/profile/converse/stream")
+async def profile_converse_stream(body: ProfileConverseRequest,
+                                  user: Dict[str, Any] = Depends(_require_user)):
+    """流式对话版：边生成边推送 token，结束后抽取画像并合并持久化（SSE / text/event-stream）。
+
+    事件协议：token(delta) → [safety(warning)] → profile(全量画像) → done(ok)。
+    任何异常：error(detail) 后结束。
+    """
+    # 同步校验（流式中无法用 HTTPException 返回状态）
+    _assert_llm_configured()
+    safety = check_input_safety(body.message)
+    if not safety.get("safe"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"内容安全检查未通过：{','.join(safety.get('reasons', []))}",
+        )
+
+    async def gen():
+        try:
+            async with get_async_session() as session:
+                existing = ProfileRepository.to_dict(await ProfileRepository(session).get_or_create())
+
+            # 1) 流式对话 messages（防幻觉系统提示 + 历史 + 用户消息）
+            system_stream = (
+                "你是一位耐心的学习陪伴助手，用中文与用户自然对话，帮助用户梳理学习目标、"
+                "巩固知识、发现薄弱点。\n" + ANTI_HALLUCINATION
+            )
+            messages = [{"role": "system", "content": system_stream}]
+            for h in (existing.get("conversation_history") or []):
+                role = h.get("role")
+                content = h.get("content")
+                if role and content:
+                    messages.append({"role": role, "content": content})
+            messages.append({"role": "user", "content": body.message})
+
+            # 2) 流式累积回复，逐段推送
+            reply = []
+            async for delta in call_llm_stream(messages, temperature=0.7, max_tokens=2000):
+                reply.append(delta)
+                yield _sse({"event": "token", "delta": delta})
+            reply_text = "".join(reply)
+
+            # 输出安全检查（不阻断，仅提示）
+            out_safety = check_output_safety(reply_text)
+            if not out_safety.get("safe"):
+                yield _sse({"event": "safety",
+                            "warning": ",".join(out_safety.get("reasons", [])) or "输出含需核实内容"})
+
+            # 3) 抽取画像并合并持久化（复用原逻辑，非流式更稳）
+            try:
+                profile_dict = await _extract_and_merge_profile(existing, body.message, reply_text)
+            except Exception as e:
+                logger.warning("流式对话画像抽取失败，回退到现有画像: %s", e)
+                profile_dict = existing
+
+            # 4) 推送画像
+            yield _sse({"event": "profile", "profile": profile_dict})
+
+            # 5) 收尾
+            yield _sse({"event": "done", "ok": True})
+        except Exception as e:
+            logger.error("流式对话异常: %s", e)
+            yield _sse({"event": "error", "detail": str(e)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.get("/api/resources")
 async def list_resources(resource_type: str = "", subject: str = "",
                         user: Dict[str, Any] = Depends(_require_user)) -> Dict[str, Any]:
@@ -1647,6 +1869,79 @@ async def resources_generate(body: ResourceGenerateRequest,
             else:
                 errors.append({"resource_type": r["resource_type"], "title": r["title"], "summary": r["summary"]})
     return {"resources": created, "errors": errors, "generated": len(created)}
+
+
+@app.post("/api/resources/generate/stream")
+async def resources_generate_stream(body: ResourceGenerateRequest,
+                                    user: Dict[str, Any] = Depends(_require_user)):
+    """流式资源生成版：逐类型推送 progress/resource，结束推送 done（SSE / text/event-stream）。
+
+    事件协议：progress(start) → resource(单条) → [progress(error)] → … → progress(done)。
+    单个类型失败不影响其余类型（progress error 后继续）。
+    """
+    # 同步校验（流式中无法用 HTTPException 返回状态）
+    _assert_llm_configured()
+    safety = check_input_safety(f"{body.subject} {body.topic} {body.focus}")
+    if not safety.get("safe"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"内容安全检查未通过：{','.join(safety.get('reasons', []))}",
+        )
+
+    async def gen():
+        errors = []
+        generated = 0
+        try:
+            async with get_async_session() as session:
+                repo = ResourceRepository(session)
+                prof = ProfileRepository.to_dict(await ProfileRepository(session).get_or_create())
+            profile_text = _profile_to_text(prof)
+            types = [t for t in (body.resource_types or ALL_RESOURCE_TYPES) if t in RESOURCE_META]
+            if not types:
+                types = ALL_RESOURCE_TYPES
+
+            async with get_async_session() as session:
+                repo = ResourceRepository(session)
+                for rtype in types:
+                    for _i in range(max(1, body.per_type)):
+                        meta = RESOURCE_META[rtype]
+                        yield _sse({"event": "progress", "agent": meta["agent"],
+                                    "label": meta["label"], "status": "start"})
+                        try:
+                            parsed = await _generate_resource_content(rtype, meta, body, profile_text)
+                            content = parsed.get("content", "")
+                            out_safety = check_output_safety(content)
+                            flagged = not out_safety.get("safe", True)
+                            resource = await repo.add(
+                                resource_type=rtype,
+                                title=parsed.get("title", f"{meta['label']}：{body.subject}"),
+                                summary=parsed.get("summary", ""),
+                                content=(content + RESOURCE_FOOTNOTE) if content else "",
+                                format=meta["format"], source_agent=meta["agent"],
+                                subject=body.subject, difficulty=1,
+                            )
+                            if flagged:
+                                resource = dict(resource)
+                                resource["flagged"] = True
+                                resource["safety_warning"] = ",".join(out_safety.get("reasons", [])) or "内容需核实"
+                            yield _sse({"event": "resource", "resource": resource})
+                            generated += 1
+                        except Exception as e:
+                            logger.warning("资源生成失败 %s: %s", rtype, e)
+                            errors.append({"resource_type": rtype, "detail": str(e)[:200]})
+                            yield _sse({"event": "progress", "agent": meta["agent"],
+                                        "label": meta["label"], "status": "error", "detail": str(e)[:200]})
+
+            yield _sse({"event": "progress", "status": "done", "generated": generated, "errors": errors})
+        except Exception as e:
+            logger.error("流式资源生成异常: %s", e)
+            yield _sse({"event": "error", "detail": str(e)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/path/plan")

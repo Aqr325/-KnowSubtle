@@ -226,7 +226,7 @@
   .res-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
   .res-card {
     background: rgba(168,85,247,0.04); border: 1px solid rgba(168,85,247,0.12); border-radius: 14px; padding: 16px;
-    cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); position: relative; display: flex; flex-direction: column; gap: 8px;
+    cursor: pointer; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); position: relative; display: flex; flex-direction: column; gap: 8px; overflow: hidden;
   }
   .res-card:hover { background: rgba(168,85,247,0.09); border-color: rgba(168,85,247,0.3); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(168,85,247,0.12); }
   .res-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -303,6 +303,55 @@
   .md-mermaid { border-color: rgba(236,72,153,0.3); }
   .md-note { font-size: 12px; color: var(--text-muted); margin: 8px 0 0; font-style: italic; }
 
+  /* ── Safety warning bar ── */
+  .safety-bar {
+    display: none; align-items: center; gap: 10px;
+    padding: 12px 16px; border-radius: 12px; margin-bottom: 14px;
+    background: rgba(234,179,8,0.12); border: 1px solid rgba(234,179,8,0.4);
+    color: #fde68a; font-size: 13px; line-height: 1.5;
+  }
+  .safety-bar.show { display: flex; }
+
+  /* ── Generation progress ── */
+  .gen-progress { display: none; margin-bottom: 18px; }
+  .gen-progress.show { display: block; }
+  .gen-header { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+  .gen-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .gen-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: rgba(168,85,247,0.05); border: 1px solid rgba(168,85,247,0.12); font-size: 13px; }
+  .gen-icon { font-size: 16px; line-height: 1; flex-shrink: 0; }
+  .gen-label { flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gen-status { font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .gen-waiting { color: var(--text-muted); }
+  .gen-running { color: var(--purple-light); }
+  .gen-done { color: #6ee7b7; }
+  .gen-failed { color: #fca5a5; }
+  .gen-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(168,85,247,0.3); border-top-color: var(--purple-light); animation: spin 0.8s linear infinite; flex-shrink: 0; }
+  .gen-spinner.gen-hidden { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Multimodal resource card ── */
+  .res-type { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .res-type-icon { font-size: 16px; line-height: 1; flex-shrink: 0; }
+  .res-agent { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .res-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .res-stars { color: #fbbf24; letter-spacing: 1px; }
+  .res-format { padding: 2px 8px; border-radius: var(--radius-full); background: rgba(96,165,250,0.12); color: #93c5fd; border: 1px solid rgba(96,165,250,0.25); font-size: 10px; }
+  .res-flag { position: absolute; top: 0; left: 0; right: 0; background: rgba(239,68,68,0.92); color: #fff; font-size: 11px; font-weight: 700; padding: 4px 12px; border-radius: 14px 14px 0 0; text-align: center; }
+  .glass-card { animation: cardIn 0.4s ease both; }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* ── Footer link ── */
+  .footer-link { background: none; border: 1px solid var(--border-subtle); color: rgba(255,255,255,0.55); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; padding: 6px 12px; border-radius: var(--radius-full); cursor: pointer; font-family: inherit; transition: all 0.2s; }
+  .footer-link:hover { color: #fff; border-color: rgba(168,85,247,0.4); background: rgba(168,85,247,0.1); }
+
+  /* ── License modal ── */
+  .lic-section { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+  .lic-row { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 13px; line-height: 1.6; }
+  .lic-k { flex-shrink: 0; width: 64px; color: var(--purple-light); font-weight: 700; }
+  .lic-v { color: var(--text-secondary); }
+  .lic-foot { margin-top: 14px; font-size: 12px; color: var(--text-muted); font-style: italic; }
+  .modal-safety { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.35); color: #fca5a5; padding: 10px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 14px; line-height: 1.5; }
+
   @media (max-width: 768px) {
     .scene-header { padding: 0 16px; }
     .nav-main .nav-item { padding: 6px 10px; font-size: 11px; }
@@ -363,6 +412,7 @@
     <div class="glass-panel">
       <div class="section-title"><span class="st-emoji">&#128172;</span> 对话式画像构建</div>
       <div class="section-desc">和智能体聊聊你的基础、目标与偏好，右侧卡片会随对话实时更新</div>
+      <div class="safety-bar" id="safetyBar"></div>
       <div class="chat-area" id="chatArea"></div>
       <div class="chat-input-row">
         <textarea class="chat-input" id="chatInput" rows="1" placeholder="例如：我在学 Python，基础一般，喜欢看视频，每周大概 5 小时..."></textarea>
@@ -407,6 +457,11 @@
       <div class="form-actions">
         <button class="btn-primary" id="genBtn">生成</button>
       </div>
+    </div>
+
+    <div class="glass-panel gen-progress" id="genProgressPanel">
+      <div class="gen-header" id="genProgressHeader">生成进度</div>
+      <div class="gen-list" id="genProgressList"></div>
     </div>
 
     <div class="glass-panel">
@@ -490,6 +545,7 @@
     <span>智能学习</span>
   </div>
   <div style="display:flex;align-items:center;gap:10px;">
+    <button class="footer-link" id="openLicense">技术栈 / 许可</button>
     <span>Learning Universe</span>
   </div>
 </footer>
@@ -513,6 +569,15 @@
       <button class="btn-secondary" id="confirmCancel">取消</button>
       <button class="btn-primary" id="confirmOk">确定</button>
     </div>
+  </div>
+</div>
+
+<!-- License Modal -->
+<div class="modal-overlay" id="licenseModal">
+  <div class="modal-box">
+    <button class="close-modal" data-close="licenseModal">&times;</button>
+    <div class="modal-title">技术栈与开源许可</div>
+    <div class="modal-body" id="licenseBody"></div>
   </div>
 </div>
 
@@ -618,6 +683,24 @@
     });
   }
 
+  function openLicenseModal() {
+    var body = document.getElementById('licenseBody');
+    var rows = [
+      ['后端', 'Python 3.11（PSF 许可）· FastAPI（MIT）· Uvicorn（BSD）· SQLAlchemy（MIT）· aiosqlite（MIT）· httpx（BSD）· Pydantic（MIT）'],
+      ['桌面端', 'PyQt6 / PyQtWebEngine（GPL v3 或 Riverbank 商业许可；闭源分发需购买商业许可）'],
+      ['模型', 'OpenAI 兼容 API（模型由用户自备 Key，协议取决于所选供应商）'],
+      ['前端', '原生 HTML/CSS/JS 单文件 SPA（无第三方库）'],
+      ['内容安全', '自研离线启发式过滤模块']
+    ];
+    var html = '<div class="lic-section">本产品基于以下技术构建：</div>' +
+      rows.map(function (r) {
+        return '<div class="lic-row"><div class="lic-k">' + escHtml(r[0]) + '</div><div class="lic-v">' + escHtml(r[1]) + '</div></div>';
+      }).join('') +
+      '<div class="lic-foot">完整开源协议与来源见 docs/ATTRIBUTION.md</div>';
+    body.innerHTML = html;
+    openModal('licenseModal');
+  }
+
   // ═══ Lightweight Markdown Renderer ═══
   // All input is escaped first; only safe structural tags are then added.
   function inlineFormat(s) {
@@ -708,10 +791,21 @@
   ];
   var RES_LABEL = {};
   RESOURCE_TYPES.forEach(function (t) { RES_LABEL[t.key] = t.label; });
+  var RES_ICON = {
+    EXPLANATION: '📘', MIND_MAP: '🧠', EXERCISE: '✍️', READING: '📚',
+    CODE_EXAMPLE: '💻', VIDEO_SCRIPT: '🎬', VISUAL_AID: '🖼️'
+  };
   var COG_MAP = { visual: '视觉型', auditory: '听觉型', read_write: '读写型', kinaesthetic: '动手型' };
   var PACE_MAP = { slow: '慢节奏', normal: '适中', fast: '快节奏' };
 
   function resTypeLabel(key) { return RES_LABEL[key] || key || '资源'; }
+
+  function difficultyStars(d) {
+    var n = Number(d);
+    if (isNaN(n) || n <= 0) return null;
+    var full = Math.max(0, Math.min(5, Math.round(n)));
+    return '★'.repeat(full) + '☆'.repeat(5 - full);
+  }
 
   function fmtTime(s) {
     if (!s) return '';
@@ -816,7 +910,82 @@
     }).catch(function () {});
   }
 
-  function sendMessage() {
+  function showSafetyWarning(text) {
+    var bar = document.getElementById('safetyBar');
+    if (!bar) return;
+    bar.textContent = '⚠ ' + (text || '内容安全提示');
+    bar.classList.add('show');
+  }
+
+  // Stream POST /api/profile/converse/stream (SSE-style) via fetch + ReadableStream.
+  // Returns true if the stream was consumed, false if unsupported/errored (caller falls back).
+  async function streamConverse(message, textEl) {
+    var token = localStorage.getItem('wc_auth_token');
+    var resp;
+    try {
+      resp = await fetch('/api/profile/converse/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify({ message: message, history: [] })
+      });
+    } catch (e) { return false; }
+    if (!resp.ok || !resp.body) return false;
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var buf = '';
+    var first = true;
+    try {
+      while (true) {
+        var r = await reader.read();
+        if (r.done) break;
+        buf += dec.decode(r.value, { stream: true });
+        var idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          var chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          var lines = chunk.split('\n');
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('data: ') !== 0) continue;
+            var ev;
+            try { ev = JSON.parse(lines[i].slice(6)); } catch (e2) { continue; }
+            if (!ev || !ev.event) continue;
+            if (ev.event === 'token') {
+              if (first) { textEl.textContent = ''; first = false; }
+              textEl.textContent += (ev.delta || '');
+              var ca = document.getElementById('chatArea');
+              if (ca) ca.scrollTop = ca.scrollHeight;
+            } else if (ev.event === 'profile') {
+              if (ev.profile) { state.profile = ev.profile; renderProfileCards(ev.profile); }
+            } else if (ev.event === 'safety') {
+              showSafetyWarning(ev.warning);
+            } else if (ev.event === 'error') {
+              if (first) textEl.textContent = '';
+              showToast((ev.detail || '出错了'), 'error');
+              return true;
+            } else if (ev.event === 'done') {
+              return true;
+            }
+          }
+        }
+      }
+      return true;
+    } catch (e) { return false; }
+  }
+
+  // Non-streaming fallback for /api/profile/converse — fills the existing placeholder bubble.
+  async function sendMessageFallback(msg, textEl) {
+    try {
+      var res = await authFetch('/api/profile/converse', { method: 'POST', body: JSON.stringify({ message: msg, history: [] }) });
+      if (res.status === 401) { showToast('登录已失效，请重新登录', 'error'); setTimeout(function () { window.location.href = 'landing.html'; }, 1500); return; }
+      if (res.status === 400) { var d = await readJson(res); showToast((d && d.detail) || '请求失败', 'error'); textEl.textContent = '（请求失败）'; return; }
+      if (!res.ok) { showToast('对话失败（' + res.status + '）', 'error'); textEl.textContent = '（对话失败）'; return; }
+      var dd = await res.json();
+      if (dd && dd.reply) { textEl.textContent = dd.reply; } else { textEl.textContent = '（暂无回复）'; }
+      if (dd && dd.profile) { state.profile = dd.profile; renderProfileCards(dd.profile); }
+    } catch (e) { showToast('网络错误，请重试', 'error'); textEl.textContent = '（网络错误）'; }
+  }
+
+  async function sendMessage() {
     var input = document.getElementById('chatInput');
     var msg = (input.value || '').trim();
     if (!msg) return;
@@ -824,18 +993,21 @@
     appendBubble('user', msg);
     var btn = document.getElementById('chatSend');
     btn.disabled = true;
-    authFetch('/api/profile/converse', { method: 'POST', body: JSON.stringify({ message: msg, history: [] }) })
-      .then(function (res) {
-        if (res.status === 401) { showToast('登录已失效，请重新登录', 'error'); setTimeout(function () { window.location.href = 'landing.html'; }, 1500); return; }
-        if (res.status === 400) { return readJson(res).then(function (d) { showToast((d && d.detail) || '请求失败', 'error'); }); }
-        if (!res.ok) { showToast('对话失败（' + res.status + '）', 'error'); return; }
-        return res.json().then(function (d) {
-          if (d && d.reply) appendBubble('assistant', d.reply);
-          if (d && d.profile) { state.profile = d.profile; renderProfileCards(d.profile); }
-        });
-      })
-      .catch(function () { showToast('网络错误，请重试', 'error'); })
-      .then(function () { btn.disabled = false; });
+    var sb = document.getElementById('safetyBar');
+    if (sb) { sb.classList.remove('show'); sb.textContent = ''; }
+    var el = document.getElementById('chatArea');
+    var empty = el.querySelector('.chat-empty');
+    if (empty) empty.parentNode.removeChild(empty);
+    var aBubble = document.createElement('div');
+    aBubble.className = 'chat-bubble assistant';
+    aBubble.innerHTML = '<div class="bubble-who">智能体</div><div class="bubble-text">正在输入…</div>';
+    el.appendChild(aBubble);
+    el.scrollTop = el.scrollHeight;
+    var textEl = aBubble.querySelector('.bubble-text');
+    var ok = false;
+    try { ok = await streamConverse(msg, textEl); } catch (e) { ok = false; }
+    if (!ok) { await sendMessageFallback(msg, textEl); }
+    btn.disabled = false;
   }
 
   // ═══ TAB 2: Resources ═══
@@ -863,17 +1035,27 @@
   function resourceCardHtml(r, showDel) {
     if (!r) return '';
     var id = String(r.id);
+    var icon = RES_ICON[r.resource_type] || '📄';
     var delBtn = showDel ? '<button class="btn-danger-sm res-del" data-del-id="' + escHtml(id) + '">删除</button>' : '';
+    var flag = r.flagged ? '<div class="res-flag">⚠ 内容已标记</div>' : '';
+    var stars = difficultyStars(r.difficulty);
+    var metaParts = [];
+    if (r.subject) metaParts.push('<span>📚 ' + escHtml(r.subject) + '</span>');
+    if (stars) metaParts.push('<span class="res-stars">' + escHtml(stars) + '</span>');
+    else if (r.difficulty != null) metaParts.push('<span>难度 ' + escHtml(String(r.difficulty)) + '</span>');
+    if (r.format) metaParts.push('<span class="res-format">' + escHtml(r.format) + '</span>');
+    if (r.created_at) metaParts.push('<span>🕒 ' + escHtml(fmtTime(r.created_at)) + '</span>');
     return '<div class="res-card" data-res-id="' + escHtml(id) + '" style="content-visibility:auto;contain-intrinsic-size:auto 160px;">' +
-      '<div class="res-top"><span class="res-badge">' + escHtml(resTypeLabel(r.resource_type)) + '</span>' +
-      (r.difficulty != null ? '<span class="res-diff">难度 ' + escHtml(String(r.difficulty)) + '</span>' : '') + '</div>' +
+      flag +
+      '<div class="res-top">' +
+        '<span class="res-type"><span class="res-type-icon" aria-hidden="true">' + icon + '</span>' +
+        '<span class="res-badge">' + escHtml(resTypeLabel(r.resource_type)) + '</span></span>' +
+        (r.source_agent ? '<span class="res-agent">🤖 ' + escHtml(r.source_agent) + '</span>' : '') +
+      '</div>' +
       '<div class="res-title">' + escHtml(r.title || '未命名资源') + '</div>' +
       (r.summary ? '<div class="res-summary">' + escHtml(r.summary) + '</div>' : '') +
-      '<div class="res-meta">' +
-      (r.source_agent ? '<span>🤖 ' + escHtml(r.source_agent) + '</span>' : '') +
-      (r.subject ? '<span>📚 ' + escHtml(r.subject) + '</span>' : '') +
-      (r.created_at ? '<span>🕒 ' + escHtml(fmtTime(r.created_at)) + '</span>' : '') +
-      '</div>' + delBtn + '</div>';
+      '<div class="res-meta">' + metaParts.join('') + '</div>' +
+      delBtn + '</div>';
   }
 
   function renderResourceList() {
@@ -898,7 +1080,129 @@
     }).catch(function () {});
   }
 
-  function generateResources() {
+  function showGenProgress(selected) {
+    var panel = document.getElementById('genProgressPanel');
+    var list = document.getElementById('genProgressList');
+    var header = document.getElementById('genProgressHeader');
+    list.innerHTML = selected.map(function (t) {
+      return '<div class="gen-row" data-rtype="' + escHtml(t.key) + '">' +
+        '<span class="gen-spinner gen-hidden" aria-hidden="true"></span>' +
+        '<span class="gen-icon">' + (t.emoji || RES_ICON[t.key] || '') + '</span>' +
+        '<span class="gen-label">' + escHtml(t.label) + '</span>' +
+        '<span class="gen-status gen-waiting">等待中</span>' +
+        '</div>';
+    }).join('');
+    if (header) header.textContent = '生成进度';
+    panel.style.display = 'block';
+  }
+
+  function hideGenProgress() {
+    var panel = document.getElementById('genProgressPanel');
+    if (panel) panel.style.display = 'none';
+  }
+
+  function setGenStatus(rtype, status, detail) {
+    var row = document.querySelector('.gen-row[data-rtype="' + rtype + '"]');
+    if (!row) return;
+    var statusEl = row.querySelector('.gen-status');
+    var spinner = row.querySelector('.gen-spinner');
+    statusEl.className = 'gen-status';
+    spinner.className = 'gen-spinner gen-hidden';
+    if (status === 'start') {
+      statusEl.classList.add('gen-running'); statusEl.textContent = '生成中…';
+      spinner.classList.remove('gen-hidden');
+    } else if (status === 'done') {
+      statusEl.classList.add('gen-done'); statusEl.textContent = '完成 ✓';
+    } else if (status === 'error') {
+      statusEl.classList.add('gen-failed'); statusEl.textContent = '失败' + (detail ? '：' + detail : '');
+    } else {
+      statusEl.classList.add('gen-waiting'); statusEl.textContent = '等待中';
+    }
+  }
+
+  function refreshGenHeader(n, m) {
+    var header = document.getElementById('genProgressHeader');
+    if (header) header.textContent = '生成进度 — 已生成 ' + n + ' 个，失败 ' + m + ' 个';
+  }
+
+  function insertResourceLive(r) {
+    if (!r) return;
+    state.resources.unshift(r);
+    if (r.id != null) state.resMap[String(r.id)] = r;
+    var typeFilter = document.getElementById('resTypeFilter').value;
+    var subjQuery = (document.getElementById('resSubjQuery').value || '').trim().toLowerCase();
+    var pass = true;
+    if (typeFilter && r.resource_type !== typeFilter) pass = false;
+    if (subjQuery && (r.subject || '').toLowerCase().indexOf(subjQuery) === -1) pass = false;
+    if (pass) {
+      var list = document.getElementById('resourceList');
+      var es = list.querySelector('.empty-state');
+      if (es) es.parentNode.removeChild(es);
+      list.insertAdjacentHTML('afterbegin', resourceCardHtml(r, true));
+    }
+  }
+
+  async function streamGenerate(body) {
+    var token = localStorage.getItem('wc_auth_token');
+    var resp;
+    try {
+      resp = await fetch('/api/resources/generate/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: body
+      });
+    } catch (e) { return false; }
+    if (!resp.ok || !resp.body) return false;
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var buf = '';
+    var counts = { ok: 0, fail: 0 };
+    try {
+      while (true) {
+        var r = await reader.read();
+        if (r.done) break;
+        buf += dec.decode(r.value, { stream: true });
+        var idx;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          var chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          var lines = chunk.split('\n');
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].indexOf('data: ') !== 0) continue;
+            var ev;
+            try { ev = JSON.parse(lines[i].slice(6)); } catch (e2) { continue; }
+            if (!ev || !ev.event) continue;
+            if (ev.event === 'progress') {
+              if (ev.status === 'start') { setGenStatus(ev.resource_type, 'start'); }
+              else if (ev.status === 'error') { counts.fail++; setGenStatus(ev.resource_type, 'error', ev.detail); refreshGenHeader(counts.ok, counts.fail); }
+              else if (ev.status === 'done') { counts.ok++; setGenStatus(ev.resource_type, 'done'); refreshGenHeader(counts.ok, counts.fail); }
+            } else if (ev.event === 'resource') {
+              insertResourceLive(ev.resource);
+            } else if (ev.event === 'error') {
+              showToast((ev.detail || '生成出错'), 'error');
+            }
+          }
+        }
+      }
+      refreshGenHeader(counts.ok, counts.fail);
+      return true;
+    } catch (e) { return false; }
+  }
+
+  async function generateResourcesFallback(body) {
+    try {
+      var res = await authFetch('/api/resources/generate', { method: 'POST', body: body });
+      if (res.status === 401) { showToast('登录已失效，请重新登录', 'error'); setTimeout(function () { window.location.href = 'landing.html'; }, 1500); return; }
+      if (res.status === 400) { var d = await readJson(res); showToast((d && d.detail) || '生成失败', 'error'); return; }
+      if (!res.ok) { showToast('生成失败（' + res.status + '）', 'error'); return; }
+      var dd = await res.json();
+      var n = (dd && dd.generated) || (dd && dd.resources ? dd.resources.length : 0);
+      showToast('已生成 ' + n + ' 个资源', 'success');
+      loadResources();
+    } catch (e) { showToast('网络错误，请重试', 'error'); }
+  }
+
+  async function generateResources() {
     var subject = (document.getElementById('genSubject').value || '').trim();
     if (!subject) { showToast('请填写学科', 'warning'); return; }
     var types = collectResourceTypes();
@@ -915,19 +1219,12 @@
       resource_types: types,
       per_type: perType
     });
-    authFetch('/api/resources/generate', { method: 'POST', body: body })
-      .then(function (res) {
-        if (res.status === 401) { showToast('登录已失效，请重新登录', 'error'); setTimeout(function () { window.location.href = 'landing.html'; }, 1500); return; }
-        if (res.status === 400) { return readJson(res).then(function (d) { showToast((d && d.detail) || '生成失败', 'error'); }); }
-        if (!res.ok) { showToast('生成失败（' + res.status + '）', 'error'); return; }
-        return res.json().then(function (d) {
-          var n = (d && d.generated) || (d && d.resources ? d.resources.length : 0);
-          showToast('已生成 ' + n + ' 个资源', 'success');
-          loadResources();
-        });
-      })
-      .catch(function () { showToast('网络错误，请重试', 'error'); })
-      .then(function () { btn.disabled = false; btn.textContent = '生成'; });
+    var selected = RESOURCE_TYPES.filter(function (t) { return types.indexOf(t.key) >= 0; });
+    showGenProgress(selected);
+    var ok = false;
+    try { ok = await streamGenerate(body); } catch (e) { ok = false; }
+    if (!ok) { hideGenProgress(); await generateResourcesFallback(body); }
+    btn.disabled = false; btn.textContent = '生成';
   }
 
   function deleteResource(id) {
@@ -948,14 +1245,17 @@
     document.getElementById('contentModalTitle').textContent = r.title || '资源详情';
     var meta = [];
     if (r.resource_type) meta.push('类型：' + resTypeLabel(r.resource_type));
-    if (r.source_agent) meta.push('智能体：' + r.source_agent);
-    if (r.subject) meta.push('学科：' + r.subject);
-    if (r.difficulty != null) meta.push('难度：' + r.difficulty);
-    if (r.created_at) meta.push('时间：' + fmtTime(r.created_at));
+    if (r.source_agent) meta.push('智能体：' + escHtml(r.source_agent));
+    if (r.subject) meta.push('学科：' + escHtml(r.subject));
+    if (r.difficulty != null) meta.push('难度：' + escHtml(String(r.difficulty)));
+    if (r.created_at) meta.push('时间：' + escHtml(fmtTime(r.created_at)));
     document.getElementById('contentModalMeta').textContent = meta.join('   ·   ');
     var body = document.getElementById('contentModalBody');
+    var warn = (r.flagged && r.safety_warning)
+      ? '<div class="modal-safety">⚠ ' + escHtml(r.safety_warning) + '</div>'
+      : '';
     var html = renderRich(r.content, r.format);
-    body.innerHTML = html || '<p class="empty-hint">（该资源暂无详细内容）</p>';
+    body.innerHTML = warn + (html || '<p class="empty-hint">（该资源暂无详细内容）</p>');
     body.scrollTop = 0;
     openModal('contentModal');
   }
@@ -1144,6 +1444,9 @@
         }
       });
     }
+
+    var openLicense = document.getElementById('openLicense');
+    if (openLicense) openLicense.addEventListener('click', openLicenseModal);
 
     // Modal close handlers
     var overlays = document.querySelectorAll('.modal-overlay');
