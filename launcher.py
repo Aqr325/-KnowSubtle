@@ -343,8 +343,8 @@ def _resolve_app_icon():
 def _first_launch_render_guide(app) -> str:
     """首次启动引导：让用户选择渲染模式，降低发现成本（而非藏在托盘右键）。
 
-    返回用户选择的模式键 ('balance'/'gpu'/'software')；取消或关闭时默认 'balance'。
-    纯 Qt 控件、无需 QWebEngine，可在平衡模式下安全弹出。
+    返回用户选择的模式键 ('balance'/'gpu'/'software')；点击「稍后再说」、取消或关闭时返回
+    'skip'（调用方不写入偏好，下次启动仍引导）。纯 Qt 控件、无需 QWebEngine，可在平衡模式下安全弹出。
     """
     from PyQt6.QtWidgets import (
         QDialog, QVBoxLayout, QLabel, QButtonGroup, QRadioButton,
@@ -367,7 +367,7 @@ def _first_launch_render_guide(app) -> str:
 
     sub = QLabel(
         "为获得最佳体验，请选择适合你电脑显卡的渲染模式。\n"
-        "选择后可在系统托盘右键「渲染模式」随时切换。"
+        "选择后可在系统托盘右键「渲染模式」随时切换；也可选「稍后再说」，下次启动再引导。"
     )
     sub.setStyleSheet("color:#9AA0B5; font:12px 'Microsoft YaHei';")
     sub.setWordWrap(True)
@@ -382,7 +382,6 @@ def _first_launch_render_guide(app) -> str:
          "完全不依赖显卡，最稳定但最卡，仅作兜底。"),
     ]
     group = QButtonGroup(dlg)
-    selected = {"mode": "balance"}
     for i, (key, t, d) in enumerate(opts):
         rb = QRadioButton()
         rb.setText(f"<b>{t}</b><br><span style='color:#8A90A6;'>{d}</span>")
@@ -397,17 +396,19 @@ def _first_launch_render_guide(app) -> str:
     line.setStyleSheet("color:#2A2636;")
     layout.addWidget(line)
 
-    bbox = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-    bbox.button(QDialogButtonBox.StandardButton.Ok).setText("开始使用")
-    bbox.accepted.connect(dlg.accept)
-    bbox.rejected.connect(dlg.reject)
+    bbox = QDialogButtonBox()
+    btn_later = bbox.addButton("稍后再说", QDialogButtonBox.ButtonRole.RejectRole)
+    btn_ok = bbox.addButton("开始使用", QDialogButtonBox.ButtonRole.AcceptRole)
+    btn_ok.clicked.connect(dlg.accept)
+    btn_later.clicked.connect(dlg.reject)
     layout.addWidget(bbox)
 
     if dlg.exec() == QDialog.DialogCode.Accepted:
         idx = group.checkedId()
         if 0 <= idx < len(opts):
-            selected["mode"] = opts[idx][0]
-    return selected["mode"]
+            return opts[idx][0]
+    # 稍后再说 / 取消 / 关闭：不写入偏好，下次启动仍弹出引导
+    return "skip"
 
 
 def _open_pyqt_window(port: int) -> str:
@@ -707,12 +708,16 @@ def _open_pyqt_window(port: int) -> str:
         and not os.environ.get("KS_BALANCE")
     ):
         _chosen = _first_launch_render_guide(app)
-        _save_render_mode_pref(_chosen)
-        if _chosen != "balance":
-            # 非默认模式需重启以重新应用 Chromium flags（须在 QWebEngine 初始化前生效）
-            _log(f"首次引导选择渲染模式：{_chosen}，重启以应用。")
-            return "restart"
-        _log("首次引导选择渲染模式：平衡模式（默认，无需重启）。")
+        if _chosen == "skip":
+            # 用户选择「稍后再说」：不写入偏好，下次启动仍引导；本次以默认平衡模式直接开窗口。
+            _log("首启引导：用户选择稍后再说，不写入偏好，下次启动仍引导。")
+        else:
+            _save_render_mode_pref(_chosen)
+            if _chosen != "balance":
+                # 非默认模式需重启以重新应用 Chromium flags（须在 QWebEngine 初始化前生效）
+                _log(f"首次引导选择渲染模式：{_chosen}，重启以应用。")
+                return "restart"
+            _log("首次引导选择渲染模式：平衡模式（默认，无需重启）。")
 
     win = _DesktopWindow()
 
@@ -781,17 +786,23 @@ def _open_pyqt_window(port: int) -> str:
                 _mode_actions[_m] = _a
             act_mode.setMenu(_mode_submenu)
 
+            _SHORT_LABEL = {
+                "balance": "平衡模式",
+                "gpu": "全GPU合成",
+                "software": "全软件渲染",
+            }
+
             def _refresh_mode_label():
                 _info = _RENDER_MODE_INFO or ""
-                if _info:
-                    _name = _info.split(" | ", 1)[0]
-                    _flags = _info.split("flags=", 1)[1] if "flags=" in _info else ""
-                else:
-                    _name, _flags = "未知（极早期/无头？）", ""
-                act_mode.setText(f"渲染模式：{_name}  \u25b6")
-                if _flags:
-                    act_mode.setToolTip(f"Chromium flags: {_flags}\n点击展开可切换渲染模式")
+                _flags = _info.split("flags=", 1)[1] if "flags=" in _info else ""
                 _cur = _current_pref_key()
+                _cur_label = _SHORT_LABEL.get(_cur, "未知")
+                act_mode.setText(f"当前已选：{_cur_label}  \u25b6")
+                _tip = f"当前已选：{_cur_label}"
+                if _flags:
+                    _tip += f"\nChromium flags: {_flags}"
+                _tip += "\n点击展开可切换渲染模式；或「重置渲染偏好」重新引导"
+                act_mode.setToolTip(_tip)
                 for _m, _a in _mode_actions.items():
                     _a.setChecked(_m == _cur)
 
