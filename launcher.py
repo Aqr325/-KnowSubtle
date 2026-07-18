@@ -797,6 +797,34 @@ def _open_pyqt_window(port: int) -> str:
 
             menu.aboutToShow.connect(_refresh_mode_label)
             menu.addAction(act_mode)
+
+            # 重置渲染偏好：清除已保存选择并重新打开首启引导，便于真机反复试不同档位
+            act_reset = QAction("重置渲染偏好（重新引导）", app)
+            act_reset.setIconVisibleInMenu(False)
+
+            def _reset_render_pref():
+                _reply = QMessageBox.question(
+                    win, "重置渲染偏好",
+                    "将清除已保存的渲染模式偏好，并重新打开首启引导让你重新选择。\n\n"
+                    "是否立即重置并重启？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if _reply == QMessageBox.StandardButton.Yes:
+                    try:
+                        _p = _render_pref_path()
+                        if _p.exists():
+                            _p.unlink()
+                        _log("已重置渲染偏好，重启以重新引导。")
+                    except Exception as e:
+                        _log(f"重置渲染偏好失败: {type(e).__name__}: {e}")
+                    global _PENDING_RESTART
+                    _PENDING_RESTART = True
+                    app.exit()
+
+            act_reset.triggered.connect(lambda checked=False: _reset_render_pref())
+            menu.addAction(act_reset)
+
             menu.addSeparator()
             act_show = QAction("显示窗口", app)
             act_quit = QAction("退出应用", app)
