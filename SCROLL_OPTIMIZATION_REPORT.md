@@ -104,3 +104,23 @@
 - `launcher.py`：渲染档位改用现代 Viz + 通用流畅 flags（+38/−23）
 - `dashboard/index.html`：长列表 `content-visibility:auto` + 合成层提升（+22/−2）
 - `Release-Package/Resources/html/index.html`：部署副本同步（+22/−2）
+
+---
+
+## 7. 第二轮：前端专项巡检 + 实施（S1–S4）
+
+楚界面（frontend-developer）对 `dashboard/index.html` 做了只读滚动巡检，结论：**默认 `perf-mode` 已全局掐掉模糊/过渡/动画，继续压榨的边际有限**；最值得做的是 JS 级布局抖动与效果开启路径下的毛玻璃。本轮按用户确认只实施**安全四项（零功能/外观变化、纯 HTML、改完即生效，无需重打包 exe）**：
+
+| 项 | 位置 | 优化 | 预期收益 |
+|---|---|---|---|
+| S1 | `addMsg`/`appendBotBubble`（3589/3610） | 聊天置底改 `requestAnimationFrame` 单次（`scrollMsgsToBottom()`），消除每条消息 append 后的强制同步重排 | 长会话回放 N 次重排 → 1 次 |
+| S2 | `vocabSearch` input（4511）+ `renderVocab`（3065） | 搜索防抖 120ms + `documentFragment` 批量插入 | 边打字边搜不再每键整列重建 DOM |
+| S3 | `content-visibility` 块（2221） | 按列表类型给具体 `contain-intrinsic-size`（聊天120/卡片96/生词120/任务56/番茄64/通知72/配置200） | 长项首屏滚动条更稳 |
+| S4 | `saveHistory`（3527） | 写盘防抖 200ms（合并多次调用） | 降低主线程同步 `localStorage` 写盘频率 |
+
+**验证**：无头 Chrome 加载页面，仅 `file://` 直开时的 API CORS 网络报错（与改动无关），**无 `PAGEERROR` / 脚本解析错误**。提交 `fb6c05e`（`6dee29fe..fb6c05e6`），部署副本已同步。
+
+**未实施（需主理人/用户拍板）**：
+- **F1** 效果模式下去头尾 `backdrop-filter` 毛玻璃（视觉取舍，仅影响效果开启路径）。
+- **F3** `will-change` 收窄到仅固定头尾（真实部署为 QWebEngineView GPU 合成器，常驻 7+ 容器 `will-change` 主要是显存压力，超限反而回退）。
+- **F6** 约 40 处 `transition: all` → 具体属性（效果模式专项清理）。
