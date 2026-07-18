@@ -344,7 +344,7 @@ def _detect_gpu_tier() -> str:
     """粗略探测显卡档位，用于首启引导「推荐」默认（非精确指纹，仅供参考）。
 
     返回：
-      - 'intel'    ：Intel 集成显卡（历史上易与 DWM 冲突闪屏，推荐平衡模式）
+      - 'intel'    ：Intel 集成显卡（旧版因 Viz 合成器禁用易闪屏；现代合成器已修复，现推荐 GPU 合成）
       - 'discrete' ：独显（NVIDIA/AMD/Intel Arc 等，倾向推荐全 GPU 合成）
       - 'unknown'  ：探测失败 / 非 Windows / 无明确特征
     失败一律返回 'unknown'，不影响引导正常弹出。
@@ -398,11 +398,11 @@ def _first_launch_render_guide(app) -> str:
     sub.setWordWrap(True)
     layout.addWidget(sub)
 
-    # 按机器显卡「指纹」推荐默认档位：独显倾向全 GPU 合成，Intel 集成/未知默认平衡
+    # 按机器显卡「指纹」推荐默认档位：现代合成器已修复闪屏，全 GPU 合成滚动最丝滑，统一推荐
     _gpu_tier = _detect_gpu_tier()
-    _recommend_key = "gpu" if _gpu_tier in ("discrete", "unknown") else "balance"
+    _recommend_key = "gpu"
     _tier_hint = {
-        "intel": "检测到 Intel 集成显卡，已默认「平衡模式」（不闪兜底）；如你的机器不闪屏，可在托盘切换到「全 GPU 合成」获得最丝滑滚动。",
+        "intel": "检测到 Intel 集成显卡；现代合成器已修复旧版闪屏，已默认推荐「全 GPU 合成」获得最丝滑滚动。如个别机器仍闪屏，可在托盘切回「平衡模式」。",
         "discrete": "检测到独立显卡，已默认推荐「全 GPU 合成」获得最丝滑滚动。",
         "unknown": "未能识别显卡型号，已默认推荐「全 GPU 合成」（现代合成器已修复闪屏）；如首次出现闪屏请在托盘切回「平衡模式」。",
     }.get(_gpu_tier, "")
@@ -626,10 +626,11 @@ def _open_pyqt_window(port: int) -> str:
             "--enable-gpu-rasterization --disable-gpu-compositing"
         )
     else:
-        # 默认：平衡模式（GPU 光栅 + CPU 合成），规避集显 GPU 合成闪屏
-        _mode_name = "平衡模式(默认)"
+        # 默认：全 GPU 合成（最丝滑滚动）。现代 Viz 合成器已根除旧版集显闪屏，
+        # 滚动帧由合成器线程 / GPU 独立产出，不占用主线程，彻底消除长列表上下滑动卡顿。
+        _mode_name = "GPU合成(默认)"
         _chromium_flags = (
-            "--enable-gpu-rasterization --disable-gpu-compositing"
+            "--enable-gpu-rasterization --enable-gpu-compositing"
         )
     # 通用增强 flags（各模式共用，不重新引入闪屏）：
     #  - 平滑滚动、关闭后台计时器/渲染进程/Occluded 窗口节流 → 滚动跟手、遮挡恢复不卡顿；
