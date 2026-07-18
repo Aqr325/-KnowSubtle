@@ -2221,6 +2221,14 @@
     content-visibility: auto;
     contain-intrinsic-size: auto 88px;
   }
+  /* S3: per-type intrinsic size — reduces scrollbar jump on very long items (auto remembers real size after first paint) */
+  body.perf-mode .chat-message   { contain-intrinsic-size: auto 120px; }
+  body.perf-mode .agent-card     { contain-intrinsic-size: auto 96px; }
+  body.perf-mode .vocab-item     { contain-intrinsic-size: auto 120px; }
+  body.perf-mode .task-item      { contain-intrinsic-size: auto 56px; }
+  body.perf-mode .pomo-item      { contain-intrinsic-size: auto 64px; }
+  body.perf-mode .notif-item     { contain-intrinsic-size: auto 72px; }
+  body.perf-mode .config-section { contain-intrinsic-size: auto 200px; }
   /* Replace frosted glass with near-solid backgrounds so text stays readable */
   body.perf-mode .glass,
   body.perf-mode .stat-card,
@@ -3062,6 +3070,7 @@
       list.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-dimmed)">暂无词汇数据</div>';
       return;
     }
+    var frag = document.createDocumentFragment();
     items.forEach(function(v) {
       var div = document.createElement('div');
       div.className = 'vocab-item' + (v.mastered ? ' mastered' : '');
@@ -3075,8 +3084,9 @@
           '<button class="review-btn" data-id="' + (v.id||'') + '">复习</button>' +
           '<button class="delete-btn" data-id="' + (v.id||'') + '">删除</button>' +
         '</div>';
-      list.appendChild(div);
+      frag.appendChild(div);
     });
+    list.appendChild(frag);
   }
 
   // ── Vocab Add ──
@@ -3521,10 +3531,14 @@
       try { return JSON.parse(data); } catch (e) { console.warn('聊天记录解析失败', e); return []; }
     }
 
+    var _saveTimer = null;
     function saveHistory(agentId, messages) {
       var key = 'wc_chat_' + agentId;
       if (messages.length > 40) messages = messages.slice(-40);
-      localStorage.setItem(key, JSON.stringify(messages));
+      if (_saveTimer) clearTimeout(_saveTimer);
+      _saveTimer = setTimeout(function () {
+        try { localStorage.setItem(key, JSON.stringify(messages)); } catch (e) {}
+      }, 200);
     }
 
     // ── Build agent list ──
@@ -3580,13 +3594,24 @@
       }
     }
 
+    // Scroll chat to bottom at most once per animation frame (avoids a forced sync reflow on every appended message)
+    var _scrollTick = false;
+    function scrollMsgsToBottom() {
+      if (_scrollTick) return;
+      _scrollTick = true;
+      requestAnimationFrame(function () {
+        _scrollTick = false;
+        if (msgs) msgs.scrollTop = msgs.scrollHeight;
+      });
+    }
+
     function addMsg(text, isUser, skipSave) {
       if (!msgs || !CURRENT_AGENT) return;
       var div = document.createElement('div');
       div.className = 'chat-message ' + (isUser ? 'user' : 'bot');
       div.innerHTML = '<div class="bubble">' + escHtml(text) + '</div>';
       msgs.appendChild(div);
-      msgs.scrollTop = msgs.scrollHeight;
+      scrollMsgsToBottom();
 
       // Save to history (skip when replaying existing history)
       if (skipSave) return;
@@ -3607,7 +3632,7 @@
       }
       div.innerHTML = inner;
       msgs.appendChild(div);
-      msgs.scrollTop = msgs.scrollHeight;
+      scrollMsgsToBottom();
       return div.querySelector('.bubble');
     }
 
@@ -4508,8 +4533,11 @@
     $('#pomoShort').addEventListener('change', savePomoSettings);
     $('#pomoLong').addEventListener('change', savePomoSettings);
     $('#detailClose').addEventListener('click', closeDetailPopup);
+    var _vocabTimer = null;
     $('#vocabSearch').addEventListener('input', function() {
-      renderVocab(this.value);
+      var v = this.value;
+      if (_vocabTimer) clearTimeout(_vocabTimer);
+      _vocabTimer = setTimeout(function () { renderVocab(v); }, 120);
     });
     $('#vocabList').addEventListener('click', function(e) {
       var btn = e.target.closest('button');
