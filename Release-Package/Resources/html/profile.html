@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
+<head><script>window.escHtml = window.escHtml || function escHtml(s) {
+  if (s == null) s = '';
+  return String(s).replace(/[&<>"']/g, function (c) {
+    if (c === '&') return '&amp;';
+    if (c === '<') return '&lt;';
+    if (c === '>') return '&gt;';
+    if (c === '"') return '&quot;';
+    if (c === "'") return '&#39;';
+    return c;
+  });
+};
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KnowSubtle — 我的星球</title>
@@ -1016,6 +1027,7 @@
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
   }
+  window.escHtml = escHtml;
 
   // ═══ Toast Notification ═══
   function showToast(message, type) {

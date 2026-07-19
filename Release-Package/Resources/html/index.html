@@ -1,7 +1,18 @@
 <!DOCTYPE html>
 <html lang="zh-CN" class="dark perf-mode">
-<head>
-  <meta charset="UTF-8">
+<head><script>window.escHtml = window.escHtml || function escHtml(s) {
+  if (s == null) s = '';
+  return String(s).replace(/[&<>"']/g, function (c) {
+    if (c === '&') return '&amp;';
+    if (c === '<') return '&lt;';
+    if (c === '>') return '&gt;';
+    if (c === '"') return '&quot;';
+    if (c === "'") return '&#39;';
+    return c;
+  });
+};
+</script>
+<meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KnowSubtle — Learning Universe</title>
   <meta name="description" content="个性化学习多智能体系统仪表盘">
@@ -2883,6 +2894,7 @@ window.addEventListener('error', function (e) {
   console.error('[global error]', e);
 });
 window.addEventListener('unhandledrejection', function (e) {
+  if (e && e.preventDefault) e.preventDefault();
   var r = (e && e.reason) ? e.reason : ((e && e.detail) ? e.detail : '');
   showErrorBanner('Promise 未处理拒绝: ' + (r && r.message ? r.message : String(r)));
   console.error('[unhandledrejection]', e);
@@ -2923,6 +2935,7 @@ window.addEventListener('unhandledrejection', function (e) {
   function escHtml(s) {
     return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  window.escHtml = escHtml;
 
   function entityToChar(s) {
     return (s || '').replace(/&#(\d+);/g, function(_, c) { return String.fromCodePoint(parseInt(c, 10)); });

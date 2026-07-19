@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
+<head><script>window.escHtml = window.escHtml || function escHtml(s) {
+  if (s == null) s = '';
+  return String(s).replace(/[&<>"']/g, function (c) {
+    if (c === '&') return '&amp;';
+    if (c === '<') return '&lt;';
+    if (c === '>') return '&gt;';
+    if (c === '"') return '&quot;';
+    if (c === "'") return '&#39;';
+    return c;
+  });
+};
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KnowSubtle — 智能学习</title>
@@ -590,6 +601,7 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  window.escHtml = escHtml;
 
   // ═══ Auth Guard ═══
   (function () {
@@ -600,6 +612,7 @@
 
   // ═══ 全局兜底：未处理的 Promise 拒绝 / 脚本错误 转为日志，避免演示中报错刷屏 ═══
   window.addEventListener('unhandledrejection', function (ev) {
+    if (ev && ev.preventDefault) ev.preventDefault();
     var r = ev && ev.reason;
     console.error('[KnowSubtle] 未处理的 Promise 拒绝:', r && (r.message || r));
   });

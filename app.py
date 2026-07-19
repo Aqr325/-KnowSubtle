@@ -134,6 +134,14 @@ from learning_agent_system.database.session import init_db, close_db, get_async_
 @app.on_event("startup")
 async def startup_db():
     await init_db()
+    # 桌面本地单用户自动登录：仅当启动器显式开启 KS_LOCAL_AUTOLOGIN 时供给本地账号，
+    # 使桌面端无需单独登录即可使用「智能学习」等需鉴权功能（与网页端体验一致）。
+    # 该开关仅由桌面启动器设置，普通 web 部署不触发，不会对外暴露自动会话。
+    if os.environ.get("KS_LOCAL_AUTOLOGIN", "").strip().lower() in ("1", "true", "yes"):
+        try:
+            await _provision_local_user()
+        except Exception as e:
+            logger.warning("本地账号自动供给失败（桌面端需手动登录）: %s", e)
 
 @app.on_event("shutdown")
 async def shutdown_db():
@@ -1183,6 +1191,64 @@ def _user_to_dict(u) -> Dict[str, Any]:
         "created_at": u.created_at.isoformat() if u.created_at else "",
         "last_login": u.last_login.isoformat() if u.last_login else "",
     }
+
+
+# ── 桌面本地单用户自动登录（仅 KS_LOCAL_AUTOLOGIN=1 时启用）──
+# 桌面端用全新 QWebEngine 配置，localStorage 无登录态，导致「智能学习」等需鉴权页面
+# 被 Auth Guard 弹回首页（表现为"桌面端没有智能学习界面"）。本机制由桌面启动器
+# 显式开启：服务端启动时自动注册并登录一个专用本地账号，通过 /bootstrap 引导页
+# 将 token 写入桌面浏览器的 localStorage，使桌面端免登录即可使用个性化功能。
+# 普通 web 部署（python app.py 不带此环境变量）不会触发，不会对外暴露自动会话。
+_LOCAL_AUTH_TOKEN = {"token": None}
+
+
+async def _provision_local_user():
+    """注册并登录专用本地账号，供桌面端免登录使用（仅在 KS_LOCAL_AUTOLOGIN=1 时调用）。"""
+    uname = "local_desktop"
+    email = "local-desktop@knowsubtle.local"
+    pwd = "knowsubtle-local-2026"
+    async with get_async_session() as session:
+        repo = UserRepository(session)
+        if not await repo.get_by_username(uname):
+            try:
+                await repo.register(
+                    username=uname, email=email, password=pwd, display_name="本地桌面"
+                )
+            except Exception:
+                pass
+        user = await repo.authenticate(uname, pwd)
+        if not user:
+            return
+        token = await repo.create_token(user.id, ttl_hours=24 * 30)
+        _LOCAL_AUTH_TOKEN["token"] = token.token
+
+
+@app.get("/api/auth/local-token")
+async def local_token():
+    """返回桌面本地账号 token（仅 KS_LOCAL_AUTOLOGIN 已启用时有效）。"""
+    t = _LOCAL_AUTH_TOKEN["token"]
+    if not t:
+        raise HTTPException(status_code=401, detail="本地自动登录未启用")
+    return {"token": t}
+
+
+@app.get("/bootstrap")
+async def bootstrap():
+    """桌面端引导页：写入本地登录态后跳回首页。
+    若自动登录未启用（如普通 web 部署误访问），优雅降级为直接跳首页。"""
+    from fastapi.responses import HTMLResponse
+
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>KnowSubtle</title></head><body><script>"
+        "fetch('/api/auth/local-token')"
+        ".then(function(r){return r.ok?r.json():null;})"
+        ".then(function(d){if(d&&d.token){try{localStorage.setItem('wc_auth_token',d.token);}catch(e){}}"
+        "location.href='/';})"
+        ".catch(function(){location.href='/';});"
+        "</script><p style='font-family:sans-serif;color:#888'>正在准备本地会话…</p></body></html>"
+    )
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/auth/register")

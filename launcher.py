@@ -565,7 +565,9 @@ def _open_pyqt_window(port: int) -> str:
       - 启动 splash + 加载进度：页面加载期间覆盖层显示百分比，避免深色背景被误认为卡死。
       - 窗口位置/大小记忆：QSettings 持久化，下次启动自动还原。
     """
-    url = f"http://127.0.0.1:{port}/"
+    # 桌面端统一从 /bootstrap 进入：自动写入本地登录态后跳回首页，
+    # 解决「桌面端无登录态 → 智能学习等需鉴权页面被 Auth Guard 弹回」的问题。
+    url = f"http://127.0.0.1:{port}/bootstrap"
     if not _is_server_up(url):
         _log("服务启动超时，未能打开界面。")
         _write_diagnose("服务启动超时", f"url={url}, error={_server_error}")
@@ -1275,6 +1277,10 @@ def main():
     url = f"http://{host}:{port}/"
     _record_url(url)
     atexit.register(_release_instance_lock)
+
+    # 桌面本地单用户自动登录：开启后服务端启动时会自动供给本地账号，
+    # 使桌面端免登录即可使用「智能学习」等需鉴权功能（仅本桌面进程生效，不影响独立 web 部署）。
+    os.environ.setdefault("KS_LOCAL_AUTOLOGIN", "1")
 
     # 启动服务（【非守护】线程，生命周期由 stop_event 控制，独立于窗口）
     server_thread = threading.Thread(target=_start_server, args=(app, host, port), daemon=False)
