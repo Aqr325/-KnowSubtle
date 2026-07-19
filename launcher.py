@@ -764,13 +764,13 @@ def _open_pyqt_window(port: int) -> str:
                     pass
             except Exception:
                 pass
-            # 磁盘 HTTP 缓存：本地仪表盘资源（JS/CSS/字体）缓存到磁盘，
-            # 重载/二次打开瞬时完成，减少白屏等待、提升流畅度
+            # 内存 HTTP 缓存（不落盘）：本地仪表盘资源每次启动都是全新载入，
+            # 从根本上杜绝旧版 learning.html 等被磁盘缓存跨重启复用，导致的
+            # "打不开 / escHtml is not defined" 顽疾。配合后端 no-store 响应头，页面永不陈化。
             try:
                 from PyQt6.QtWebEngineCore import QWebEngineProfile
                 _prof = QWebEngineProfile.defaultProfile()
-                _prof.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
-                _prof.setHttpCacheMaximumSize(200 * 1024 * 1024)  # 200MB
+                _prof.setHttpCacheType(QWebEngineProfile.HttpCacheType.MemoryHttpCache)
             except Exception:
                 pass
             self._view.setStyleSheet(f"background-color:{_UI_BG};")

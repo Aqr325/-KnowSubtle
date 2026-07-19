@@ -25,6 +25,8 @@ dist/
 .env
 config/key.yaml
 config/app.key
+config/llm_config.yaml
+Config/llm_config.yaml
 
 # Dependencies
 react-bits/
